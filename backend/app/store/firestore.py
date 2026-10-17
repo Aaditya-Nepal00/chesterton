@@ -10,6 +10,8 @@ Collections:
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 
 from google.cloud import firestore
@@ -27,6 +29,7 @@ GUARDS = "guards"
 RUNS = "runs"
 EVENTS = "events"
 _BATCH_LIMIT = 450  # Firestore allows 500 writes per batch
+logger = logging.getLogger(__name__)
 
 
 def pr_doc_id(repo: str, number: int) -> str:
@@ -60,9 +63,18 @@ async def save_analysis(result: AnalysisResult) -> str:
 
 
 # --- question sets ---
+def question_counters(qs: QuestionSetDoc) -> dict[str, int]:
+    """Numeric counters so the dashboard can sum() them server-side."""
+    return {
+        "n_questions": len(qs.questions),
+        "n_answered": sum(1 for q in qs.questions if q.status == "answered"),
+    }
+
+
 async def save_question_set(qs: QuestionSetDoc) -> str:
     db = _client()
     doc = qs.model_dump(mode="json", exclude={"created_at"})
+    doc.update(question_counters(qs))
     doc["created_at"] = firestore.SERVER_TIMESTAMP
     doc["updated_at"] = firestore.SERVER_TIMESTAMP
     ref = db.collection(QUESTIONS).document(pr_doc_id(qs.repo, qs.pr))
@@ -82,6 +94,7 @@ async def update_question_set(qs: QuestionSetDoc) -> str:
         {
             "questions": [q.model_dump(mode="json") for q in qs.questions],
             "processed_comment_ids": qs.processed_comment_ids,
+            **question_counters(qs),
             "updated_at": firestore.SERVER_TIMESTAMP,
         },
         merge=True,
@@ -116,9 +129,21 @@ async def save_decisions(records: list[DecisionRecord], extra: dict[str, Any]) -
 
 
 # --- guards ---
+def guard_counters(data: dict[str, Any]) -> dict[str, int]:
+    return {"matched_count": len(data.get("items") or [])}
+
+
 async def save_guard(repo: str, pr: int, data: dict[str, Any]) -> str:
     ref = _client().collection(GUARDS).document(pr_doc_id(repo, pr))
-    await ref.set({**data, "repo": repo, "pr": pr, "updated_at": firestore.SERVER_TIMESTAMP})
+    await ref.set(
+        {
+            **data,
+            **guard_counters(data),
+            "repo": repo,
+            "pr": pr,
+            "updated_at": firestore.SERVER_TIMESTAMP,
+        }
+    )
     return ref.path
 
 
@@ -132,7 +157,48 @@ async def start_run(run_id: str, meta: dict[str, Any]) -> str:
     return ref.path
 
 
+async def write_event(run_id: str, data: dict[str, Any]) -> None:
+    """One trace event, written as it happens (doc id = zero-padded seq, so the final
+    batch in finish_run rewrites the same docs idempotently)."""
+    ref = _client().collection(RUNS).document(run_id).collection(EVENTS)
+    await ref.document(f"{data['seq']:04d}").set({**data, "written_at": firestore.SERVER_TIMESTAMP})
+
+
+class EventStreamer:
+    """Streams TraceEvents to runs/{id}/events in order, off the workflow's hot path.
+
+    `submit` is synchronous (it's the TraceRecorder sink); a background task drains the
+    queue. A failed write is logged and counted, never raised: finish_run rewrites
+    every event at the end anyway.
+    """
+
+    def __init__(self, run_id: str):
+        self.run_id = run_id
+        self.written = 0
+        self.failed = 0
+        self._queue: asyncio.Queue[dict | None] = asyncio.Queue()
+        self._task = asyncio.create_task(self._drain())
+
+    def submit(self, event: TraceEvent) -> None:
+        self._queue.put_nowait(event.model_dump(mode="json"))  # snapshot now
+
+    async def _drain(self) -> None:
+        while (data := await self._queue.get()) is not None:
+            try:
+                await write_event(self.run_id, data)
+                self.written += 1
+            except Exception as exc:  # the final pass in finish_run covers it
+                self.failed += 1
+                if self.failed == 1:
+                    logger.warning("streaming trace write failed: %s", type(exc).__name__)
+
+    async def close(self) -> None:
+        self._queue.put_nowait(None)
+        await self._task
+
+
 async def finish_run(run_id: str, meta: dict[str, Any], events: list[TraceEvent]) -> str:
+    """Final run metadata + a consistency pass over every event (same doc ids)."""
     db = _client()
     run_ref = db.collection(RUNS).document(run_id)
     await run_ref.set({**meta, "finished_at": firestore.SERVER_TIMESTAMP}, merge=True)

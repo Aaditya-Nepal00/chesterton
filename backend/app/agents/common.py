@@ -39,6 +39,32 @@ def quota_retry_delay(error: BaseException) -> float | None:
     return None
 
 
+QUOTA_STOP_MARKERS = (
+    "AllModelsExhausted",
+    "QuotaExhausted",
+    "out of daily Gemini quota",
+    "Gemini quota exhausted",
+)
+
+
+def is_daily_quota_stop(error: BaseException | str | None) -> bool:
+    """True when a run stopped because the model chain is out of daily quota (not a bug).
+
+    Walks the exception chain (ADK may wrap the plugin's error in a RuntimeError).
+    """
+    seen = 0
+    exc = error
+    while exc is not None and seen < 6:
+        text = exc if isinstance(exc, str) else f"{type(exc).__name__}: {exc}"
+        if any(m in text for m in QUOTA_STOP_MARKERS):
+            return True
+        if isinstance(exc, str):
+            return False
+        exc = exc.__cause__ or exc.__context__
+        seen += 1
+    return False
+
+
 def is_long_quota(error: BaseException) -> bool:
     if getattr(error, "code", None) != 429:
         return False

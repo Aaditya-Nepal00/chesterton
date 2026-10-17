@@ -32,7 +32,7 @@ from app.agents import screen as screen_agent
 from app.agents.model_chain import make_model
 from app.analysis import signals as sig
 from app.analysis import verify as ver
-from app.analysis.evidence import build_evidence_index, is_diff_id
+from app.analysis.evidence import build_evidence_index, evidence_urls, is_diff_id
 from app.analysis.symbols import paths_and_symbols, symbols_for_snippet
 from app.config import get_settings
 from app.github.fetch import fetch_pr_context
@@ -227,6 +227,7 @@ async def render_comment(ctx: Context, run_id: str):
         questions=questions,
         comment_markdown=render_markdown(questions, pr=pr.number, run_id=run_id),
         models=_models(),
+        evidence_urls=evidence_urls(ctx.state.get("evidence") or {}),
         created_at=datetime.now(UTC),
     )
     dumped = result.model_dump(mode="json")
@@ -252,6 +253,7 @@ async def finish_skipped(ctx: Context, run_id: str, repo: str, number: int):
         signals=signals,
         screen=ctx.state.get("screen"),
         models=_models(),
+        evidence_urls=evidence_urls(ctx.state.get("evidence") or {}),
         created_at=datetime.now(UTC),
     )
     dumped = result.model_dump(mode="json")

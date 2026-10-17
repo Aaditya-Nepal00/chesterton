@@ -137,4 +137,6 @@ class AnalysisResult(BaseModel):
     questions: list[RenderedQuestion] = Field(default_factory=list)
     comment_markdown: str | None = None
     models: dict[str, str | None] = Field(default_factory=dict)
+    # evidence id -> html_url (diff hunk line, review/issue comment, commit, linked issue)
+    evidence_urls: dict[str, str] = Field(default_factory=dict)
     created_at: datetime

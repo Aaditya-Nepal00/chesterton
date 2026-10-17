@@ -177,7 +177,7 @@ def test_per_minute_429_keeps_backoff_and_does_not_fall_back(isolated):
     assert isolated[0].exhausted_until("m1") is None
 
 
-def test_all_models_exhausted_fails_cleanly_and_marks_run_failed(isolated):
+def test_all_models_exhausted_pauses_cleanly_with_a_clear_reason(isolated):
     _, _, runs = isolated
     model = mc.FallbackGemini.create(
         ["m1", "m2"],
@@ -186,10 +186,10 @@ def test_all_models_exhausted_fails_cleanly_and_marks_run_failed(isolated):
         ),
     )
     out = _run(model)
-    assert not out.ok and out.status == "error"
+    assert not out.ok and out.status == "quota_paused" and out.paused
     assert "AllModelsExhausted" in out.summary and "['m1', 'm2']" in out.summary
     assert CALLS == ["m1", "m2"]  # no retries: a daily quota can't be retried away
     run = runs[out.run_id]
-    assert run["status"] == "error"
+    assert run["status"] == "quota_paused"
     assert "out of daily Gemini quota" in run["summary"]
     assert any(e["status"] == "error" for e in run["events"])

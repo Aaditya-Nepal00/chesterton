@@ -1,1 +1,240 @@
 @import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Design tokens. Every color is a variable; light is the default, dark comes
+   from prefers-color-scheme unless the user picked a theme (data-theme).
+   One accent (deep teal). Semantic status colors are separate from it.
+   --------------------------------------------------------------------------- */
+:root {
+  color-scheme: light;
+  --paper: #f5f7f8;
+  --surface: #ffffff;
+  --surface-2: #eef2f4;
+  --ink: #12181c;
+  --ink-2: #39444d;
+  --ink-3: #5c6873;
+  --line: #dbe1e5;
+  --line-strong: #bfc8cf;
+
+  --accent: #0b6466;
+  --accent-hover: #084f51;
+  --accent-ink: #ffffff;
+  --accent-soft: #e0efee;
+
+  /* semantic: text / soft background / border */
+  --ok: #1d6f3a;           --ok-soft: #e2f1e7;      --ok-line: #9fcfae;        /* recorded / found */
+  --missing: #8a5300;      --missing-soft: #fcefd6; --missing-line: #e2b25d;   /* missing why */
+  --partial: #7a5f14;      --partial-soft: #fdf7e4; --partial-line: #e6d29a;   /* partial */
+  --slate: #48586a;        --slate-soft: #e8edf2;   --slate-line: #b9c5d1;     /* self_evident */
+  --muted: #5d666e;        --muted-soft: #edeff1;   --muted-line: #ccd2d7;     /* skipped */
+  --fail: #b42318;         --fail-soft: #fde8e6;    --fail-line: #f0a39b;      /* failed */
+  --guard: #3a43a4;        --guard-soft: #e9ebfb;   --guard-line: #b3b8ef;     /* guard */
+  --gemini: #0b6466;       /* LLM marker uses the accent */
+
+  --shadow: 0 1px 2px rgb(18 24 28 / 0.06), 0 1px 1px rgb(18 24 28 / 0.04);
+  --radius: 6px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: #0d1215;
+    --surface: #141a1e;
+    --surface-2: #1b2227;
+    --ink: #e5eaed;
+    --ink-2: #b6c0c7;
+    --ink-3: #8d99a2;
+    --line: #273036;
+    --line-strong: #39444c;
+    --accent: #5cc2bb;
+    --accent-hover: #7fd3cd;
+    --accent-ink: #062120;
+    --accent-soft: #0f2c2c;
+    --ok: #74c992;      --ok-soft: #12261a;      --ok-line: #2c5c3b;
+    --missing: #eab04f; --missing-soft: #2b200d; --missing-line: #6e5120;
+    --partial: #d9c483; --partial-soft: #242013; --partial-line: #5c5232;
+    --slate: #a8b6c4;   --slate-soft: #1d242b;   --slate-line: #3d4a57;
+    --muted: #9ba5ad;   --muted-soft: #1d2226;   --muted-line: #3a4248;
+    --fail: #f38b80;    --fail-soft: #2d1513;    --fail-line: #6e2c25;
+    --guard: #a2a9f5;   --guard-soft: #1a1d35;   --guard-line: #3f4486;
+    --gemini: #5cc2bb;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #0d1215;
+  --surface: #141a1e;
+  --surface-2: #1b2227;
+  --ink: #e5eaed;
+  --ink-2: #b6c0c7;
+  --ink-3: #8d99a2;
+  --line: #273036;
+  --line-strong: #39444c;
+  --accent: #5cc2bb;
+  --accent-hover: #7fd3cd;
+  --accent-ink: #062120;
+  --accent-soft: #0f2c2c;
+  --ok: #74c992;      --ok-soft: #12261a;      --ok-line: #2c5c3b;
+  --missing: #eab04f; --missing-soft: #2b200d; --missing-line: #6e5120;
+  --partial: #d9c483; --partial-soft: #242013; --partial-line: #5c5232;
+  --slate: #a8b6c4;   --slate-soft: #1d242b;   --slate-line: #3d4a57;
+  --muted: #9ba5ad;   --muted-soft: #1d2226;   --muted-line: #3a4248;
+  --fail: #f38b80;    --fail-soft: #2d1513;    --fail-line: #6e2c25;
+  --guard: #a2a9f5;   --guard-soft: #1a1d35;   --guard-line: #3f4486;
+  --gemini: #5cc2bb;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+}
+
+/* Tailwind utilities that point at the tokens (bg-surface, text-ink-2, border-line, …) */
+@theme inline {
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+
+  --font-display: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+
+  /* fixed type scale (size / line-height) */
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 13px;
+  --text-sm--line-height: 20px;
+  --text-base: 15px;
+  --text-base--line-height: 24px;
+  --text-lg: 18px;
+  --text-lg--line-height: 28px;
+  --text-xl: 22px;
+  --text-xl--line-height: 30px;
+  --text-2xl: 28px;
+  --text-2xl--line-height: 36px;
+  --text-3xl: 36px;
+  --text-3xl--line-height: 44px;
+
+  --radius-card: var(--radius);
+}
+
+/* Base element styles live in a layer so Tailwind utilities (text-*, bg-*) win over them. */
+@layer base {
+  html {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 24px;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    overflow-x: hidden;
+  }
+
+  /* digits line up everywhere */
+  body,
+  table,
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  a {
+    color: var(--accent);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+  }
+  a:hover {
+    color: var(--accent-hover);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+
+  code,
+  kbd,
+  pre,
+  .mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums slashed-zero;
+  }
+
+  ::selection {
+    background: var(--accent-soft);
+  }
+
+  /* grid children may shrink below their content (keeps wide timelines in their own scroller) */
+  main .grid > * {
+    min-width: 0;
+  }
+}
+
+/* status / semantic helpers used by StatusPill and friends */
+.tone-ok      { color: var(--ok);      background: var(--ok-soft);      border-color: var(--ok-line); }
+.tone-missing { color: var(--missing); background: var(--missing-soft); border-color: var(--missing-line); }
+.tone-partial { color: var(--partial); background: var(--partial-soft); border-color: var(--partial-line); }
+.tone-slate   { color: var(--slate);   background: var(--slate-soft);   border-color: var(--slate-line); }
+.tone-muted   { color: var(--muted);   background: var(--muted-soft);   border-color: var(--muted-line); }
+.tone-fail    { color: var(--fail);    background: var(--fail-soft);    border-color: var(--fail-line); }
+.tone-guard   { color: var(--guard);   background: var(--guard-soft);   border-color: var(--guard-line); }
+.tone-accent  { color: var(--accent);  background: var(--accent-soft);  border-color: var(--accent); }
+
+.bar-ok      { background: var(--ok); }
+.bar-fail    { background: var(--fail); }
+.bar-accent  { background: var(--accent); }
+.bar-code    { background: var(--line-strong); }
+.bar-running { background: var(--accent); opacity: 0.55; }
+
+/* skeleton shimmer */
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--line) 37%, var(--surface-2) 63%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: 4px;
+}
+
+/* new timeline rows / activity rows */
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+.row-in {
+  animation: row-in 280ms ease-out both;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.pulse {
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

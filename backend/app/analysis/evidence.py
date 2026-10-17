@@ -100,6 +100,11 @@ def build_evidence_index(pr: PRContext) -> dict[str, dict]:
     return index
 
 
+def evidence_urls(index: dict[str, dict]) -> dict[str, str]:
+    """{evidence id: html_url} for every entry that has one."""
+    return {eid: e["url"] for eid, e in index.items() if e.get("url")}
+
+
 def is_diff_id(eid: str) -> bool:
     return eid.startswith("diff:")
 

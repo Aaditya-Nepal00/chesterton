@@ -1,10 +1,32 @@
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import './index.css'
-import App from './App.tsx'
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { createBrowserRouter, RouterProvider } from "react-router";
+import "./index.css";
+import { Layout } from "./components/Layout";
+import { Overview } from "./pages/Overview";
+import { RunTrace } from "./pages/RunTrace";
+import { PrAnalysis } from "./pages/PrAnalysis";
+import { Decisions } from "./pages/Decisions";
+import { Install } from "./pages/Install";
+import { NotFound } from "./pages/NotFound";
 
-createRoot(document.getElementById('root')!).render(
+const router = createBrowserRouter([
+  {
+    element: <Layout />,
+    children: [
+      { path: "/", element: <Overview /> },
+      { path: "/runs/:id", element: <RunTrace /> },
+      { path: "/pr/:owner/:repo/:number", element: <PrAnalysis /> },
+      { path: "/decisions", element: <Decisions /> },
+      { path: "/decisions/:docId", element: <Decisions /> },
+      { path: "/install", element: <Install /> },
+      { path: "*", element: <NotFound /> },
+    ],
+  },
+]);
+
+createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <RouterProvider router={router} />
   </StrictMode>,
-)
+);

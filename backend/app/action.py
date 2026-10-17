@@ -163,6 +163,12 @@ async def amain() -> int:
     )
     print(line)
     _write_step_summary(line)
+    if outcome.paused:
+        # Daily free-tier quota for every model in the chain: not a failure of the job.
+        print(
+            "::warning::Chesterton paused: daily Gemini quota exhausted; it resumes after 00:00 UTC"
+        )
+        return 0
     return 0 if outcome.ok else 1
 
 
