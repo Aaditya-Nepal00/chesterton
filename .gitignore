@@ -16,3 +16,4 @@ frontend/dist/
 .cache/
 *.local
 .DS_Store
+firebase-debug.log
