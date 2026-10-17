@@ -1,0 +1,18 @@
+﻿.env
+*.pem
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+
+# Misc
+.cache/
+*.local
+.DS_Store
