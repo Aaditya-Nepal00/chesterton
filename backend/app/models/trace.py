@@ -32,6 +32,7 @@ class TraceEvent(BaseModel):
     summary: str = ""
     ts: datetime = Field(default_factory=lambda: datetime.now(UTC))
     duration_ms: int | None = None
+    model: str | None = None  # model that served this node (agent nodes only)
 
 
 class LlmCall(BaseModel):
@@ -82,6 +83,9 @@ def summarize_output(output: Any) -> str:
     return _short(json.dumps(output, default=str))
 
 
+SCREEN_NODES = {"screen", "judge"}
+
+
 def node_name_from_path(path: str) -> str:
     """'analyze_pr@1/rationale@1/rationale@abc' -> 'rationale'."""
     last = path.rsplit("/", 1)[-1]
@@ -96,6 +100,7 @@ class TraceRecorder:
         self.llm_calls: list[LlmCall] = []
         self._started: dict[str, float] = {}
         self._finished: set[str] = set()
+        self.model_by_path: dict[str, str] = {}
 
     def _emit(self, node: str, path: str, status: TraceStatus, summary: str = "") -> TraceEvent:
         duration_ms = None
@@ -109,6 +114,7 @@ class TraceRecorder:
             status=status,
             summary=summary,
             duration_ms=duration_ms,
+            model=self.model_by_path.get(path) if status != "started" else None,
         )
         self.events.append(ev)
         if self.sink:
@@ -135,6 +141,15 @@ class TraceRecorder:
             return None
         self._finished.add(path)
         return self._emit(node, path, "finished", summarize_output(event.output))
+
+    def models_used(self) -> dict[str, str | None]:
+        """Models that actually answered, by role (screen = screen/judge nodes)."""
+        roles: dict[str, dict[str, None]] = {"screen": {}, "main": {}}
+        for c in self.llm_calls:
+            if c.ok and c.model:
+                role = "screen" if c.node in SCREEN_NODES else "main"
+                roles[role].setdefault(c.model, None)
+        return {k: ",".join(v) or None for k, v in roles.items()}
 
     def durations(self) -> dict[str, int]:
         return {e.path: e.duration_ms for e in self.events if e.duration_ms is not None}
@@ -190,16 +205,44 @@ class TracePlugin(BasePlugin):
                     error=error,
                 )
             )
+            if ok and llm_request_model:
+                recorder.model_by_path[path] = llm_request_model
+
+    def _record_skipped(self, callback_context, skipped: list[dict]) -> None:
+        """Fallback hops inside FallbackGemini (no request was spent on cached ones)."""
+        recorder = _RECORDER.get()
+        if recorder is None:
+            return
+        path = callback_context.node_path
+        for s in skipped:
+            recorder.llm_calls.append(
+                LlmCall(
+                    node=node_name_from_path(path),
+                    path=path,
+                    model=s.get("model"),
+                    latency_ms=0,
+                    ok=False,
+                    error=f"{s.get('reason')} until {s.get('until')}; fell back",
+                )
+            )
 
     async def after_model_callback(self, *, callback_context, llm_response):
         if not getattr(llm_response, "partial", False):
-            self._record(callback_context, getattr(llm_response, "model_version", None), True, None)
+            meta = llm_response.custom_metadata or {}
+            self._record_skipped(callback_context, meta.get("chesterton_skipped") or [])
+            model = meta.get("chesterton_model") or getattr(llm_response, "model_version", None)
+            self._record(callback_context, model, True, None)
         return None
 
     async def on_model_error_callback(self, *, callback_context, llm_request, error):
         from app.agents.common import QuotaExhausted, is_long_quota, quota_retry_delay
 
-        model = getattr(llm_request, "model", None)
+        skipped = getattr(error, "skipped", None)
+        if skipped is not None:  # AllModelsExhausted: one row per model tried, no retry
+            self._model_start.pop(callback_context.node_path, None)
+            self._record_skipped(callback_context, skipped)
+            return None
+        model = getattr(error, "chesterton_model", None) or getattr(llm_request, "model", None)
         self._record(callback_context, model, False, _error_summary(error))
         if is_long_quota(error):
             # Raising here makes ADK surface a RuntimeError, which LLM_RETRY does not

@@ -16,6 +16,27 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENV_FILE = REPO_ROOT / ".env"
 
+DEFAULT_MAIN_CHAIN = ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash")
+DEFAULT_SCREEN_CHAIN = ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite")
+
+
+def parse_chain(raw: str | None) -> list[str]:
+    return [m.strip() for m in (raw or "").split(",") if m.strip()]
+
+
+def build_chain(single: str | None, chain: str | None, default: tuple[str, ...]) -> list[str]:
+    """Ordered, de-duplicated model chain.
+
+    The single-model setting (MODEL_MAIN / the old `model-main` input) goes first, then
+    MODEL_*_CHAIN, or the default chain when no chain is given.
+    """
+    out: dict[str, None] = {}
+    for m in ([single.strip()] if single and single.strip() else []) + (
+        parse_chain(chain) or list(default)
+    ):
+        out.setdefault(m, None)
+    return list(out)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -34,8 +55,10 @@ class Settings(BaseSettings):
     google_cloud_location: str = "global"
     google_application_credentials: str | None = None  # SA key file for Firestore (Actions)
     firestore_database: str = "(default)"
-    model_screen: str | None = None
+    model_screen: str | None = None  # single model (old setting); goes first in the chain
     model_main: str | None = None
+    model_screen_chain: str | None = None  # comma-separated fallback chain
+    model_main_chain: str | None = None
 
     # GitHub
     github_token: str | None = None  # read-only PAT for public repos (local only)
@@ -57,6 +80,14 @@ class Settings(BaseSettings):
     @property
     def gemini_backend(self) -> str:
         return "vertex" if self.google_genai_use_vertexai else "gemini-api"
+
+    @property
+    def main_chain(self) -> list[str]:
+        return build_chain(self.model_main, self.model_main_chain, DEFAULT_MAIN_CHAIN)
+
+    @property
+    def screen_chain(self) -> list[str]:
+        return build_chain(self.model_screen, self.model_screen_chain, DEFAULT_SCREEN_CHAIN)
 
     @property
     def github_app_configured(self) -> bool:

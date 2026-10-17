@@ -29,6 +29,7 @@ from app.agents import extract as extract_agent
 from app.agents import questions as questions_agent
 from app.agents import rationale as rationale_agent
 from app.agents import screen as screen_agent
+from app.agents.model_chain import make_model
 from app.analysis import signals as sig
 from app.analysis import verify as ver
 from app.analysis.evidence import build_evidence_index, is_diff_id
@@ -48,7 +49,7 @@ from app.models.analysis import (
 )
 from app.models.pr import PRContext
 from app.models.records import QuestionItem, QuestionSetDoc
-from app.models.trace import TraceEvent, TraceRecorder, trace_started
+from app.models.trace import TraceEvent, TraceRecorder, get_recorder, trace_started
 from app.render.pr_comment import render_comment as render_markdown
 from app.store import firestore as store
 from app.workflows.runner import RunOutcome, run_workflow
@@ -62,8 +63,11 @@ def _pr(ctx: Context) -> PRContext:
 
 
 def _models() -> dict[str, str | None]:
+    """Models that actually answered in this run (after any fallback), plus the chains."""
     s = get_settings()
-    return {"screen": s.model_screen, "main": s.model_main}
+    recorder = get_recorder()
+    used = recorder.models_used() if recorder else {"screen": None, "main": None}
+    return {**used, "screen_chain": ",".join(s.screen_chain), "main_chain": ",".join(s.main_chain)}
 
 
 # --- function nodes ---------------------------------------------------------
@@ -347,12 +351,11 @@ async def post_questions(
 
 def build_workflow() -> Workflow:
     s = get_settings()
-    if not (s.model_screen and s.model_main):
-        raise RuntimeError("MODEL_SCREEN and MODEL_MAIN must be set (run scripts/smoke_gemini.py)")
-    screen = screen_agent.build_agent(s.model_screen)
-    extract = extract_agent.build_agent(s.model_main)
-    rationale = rationale_agent.build_agent(s.model_main)
-    questions = questions_agent.build_agent(s.model_main)
+    main = make_model(s.main_chain, "main")
+    screen = screen_agent.build_agent(make_model(s.screen_chain, "screen"))
+    extract = extract_agent.build_agent(main)
+    rationale = rationale_agent.build_agent(main)
+    questions = questions_agent.build_agent(main)
     join = JoinNode(name="join_context")
 
     return Workflow(

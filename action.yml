@@ -21,14 +21,25 @@ inputs:
   app-private-key:
     description: GitHub App private key (PEM contents).
     required: true
+  model-main-chain:
+    description: >-
+      Comma-separated Gemini models for extraction, rationale, questions and answers,
+      in fallback order. When a model runs out of its daily free-tier quota, the next one
+      is used until 00:00 UTC.
+    required: false
+    default: gemini-3.8-flash,gemini-3.6-flash,gemini-2.5-flash
+  model-screen-chain:
+    description: Comma-separated Gemini models for screening and the guard judge, in fallback order.
+    required: false
+    default: gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash-lite
   model-main:
-    description: Gemini model for extraction, rationale, questions and answers.
+    description: (Older single-model input.) If set, used first, ahead of model-main-chain.
     required: false
-    default: gemini-3.8-flash
+    default: ""
   model-screen:
-    description: Gemini model for screening and the guard judge.
+    description: (Older single-model input.) If set, used first, ahead of model-screen-chain.
     required: false
-    default: gemini-3.5-flash-lite
+    default: ""
 
 runs:
   using: composite
@@ -63,6 +74,8 @@ runs:
         GOOGLE_CLOUD_PROJECT: ${{ inputs.gcp-project }}
         GITHUB_APP_ID: ${{ inputs.app-id }}
         GITHUB_APP_PRIVATE_KEY: ${{ inputs.app-private-key }}
+        MODEL_MAIN_CHAIN: ${{ inputs.model-main-chain }}
+        MODEL_SCREEN_CHAIN: ${{ inputs.model-screen-chain }}
         MODEL_MAIN: ${{ inputs.model-main }}
         MODEL_SCREEN: ${{ inputs.model-screen }}
       run: uv run --frozen --no-dev --project "${{ github.action_path }}/backend" python -m app.action

@@ -17,6 +17,7 @@ from google.adk import Context, Event, Workflow
 from google.adk.workflow import DEFAULT_ROUTE
 
 from app.agents import parse_answer as parse_agent
+from app.agents.model_chain import make_model
 from app.analysis.answers import clean_reply, verify_answers
 from app.config import get_settings
 from app.github.markers import parse_markers
@@ -252,9 +253,7 @@ async def persist(ctx: Context, persist_enabled: bool = True, dry_run: bool = Fa
 
 def build_workflow() -> Workflow:
     s = get_settings()
-    if not s.model_main:
-        raise RuntimeError("MODEL_MAIN must be set")
-    parse_answer = parse_agent.build_agent(s.model_main)
+    parse_answer = parse_agent.build_agent(make_model(s.main_chain, "main"))
     return Workflow(
         name=APP_NAME,
         edges=[

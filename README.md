@@ -25,6 +25,8 @@ Chesterton runs as a GitHub Action in your repo and talks to GitHub as its own G
    - Variable: `GCP_PROJECT` (your Google Cloud project id).
 4. **Copy [`examples/chesterton.yml`](examples/chesterton.yml)** to `.github/workflows/chesterton.yml`.
 
+**Models and free-tier quota:** Chesterton uses ordered model chains (inputs `model-main-chain` and `model-screen-chain`, defaults `gemini-3.8-flash,gemini-3.6-flash,gemini-2.5-flash` and `gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-2.5-flash-lite`). When a model hits its daily free-tier quota, Chesterton switches to the next one in the chain and skips the exhausted model until 00:00 UTC (cached in Firestore `meta/model_quota`). Per-minute limits are waited out instead. Each run records which model actually answered.
+
 That's it: merge a PR with an unexplained limit or dependency change and Chesterton will ask about it. You can also run it by hand from the Actions tab (`workflow_dispatch` with `mode` and `pr`).
 
 ## Local development (PowerShell)

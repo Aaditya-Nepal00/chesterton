@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from google.adk import Agent
+from google.adk.models.base_llm import BaseLlm
 from google.adk.workflow import node
 
 from app.agents.common import LLM_RETRY, MAX_PARALLEL_LLM, clip
@@ -34,7 +35,7 @@ def build_item(decision: dict, match: dict) -> str:
     )
 
 
-def build_agent(model: str):
+def build_agent(model: str | BaseLlm):
     agent = Agent(
         name="judge",
         model=model,

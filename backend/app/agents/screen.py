@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from google.adk import Agent
+from google.adk.models.base_llm import BaseLlm
 
 from app.agents.common import LLM_RETRY, clip
 from app.analysis.evidence import split_hunks
@@ -57,7 +58,7 @@ def build_input(pr: PRContext, signals: Signals) -> str:
     )
 
 
-def build_agent(model: str) -> Agent:
+def build_agent(model: str | BaseLlm) -> Agent:
     return Agent(
         name="screen",
         model=model,

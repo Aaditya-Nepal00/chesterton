@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from google.adk import Agent
+from google.adk.models.base_llm import BaseLlm
 
 from app.agents.common import LLM_RETRY, clip
 from app.models.records import AnswerSet, QuestionItem
@@ -42,7 +43,7 @@ def build_input(open_questions: list[QuestionItem], reply_body: str, author: str
     return f"== Open questions ==\n{qs}\n\n== Reply from @{author} ==\n{clip(reply_body, 4000)}\n"
 
 
-def build_agent(model: str) -> Agent:
+def build_agent(model: str | BaseLlm) -> Agent:
     return Agent(
         name="parse_answer",
         model=model,

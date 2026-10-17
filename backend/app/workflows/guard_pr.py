@@ -16,6 +16,7 @@ from google.adk import Context, Event, Workflow
 from google.adk.workflow import DEFAULT_ROUTE
 
 from app.agents import judge as judge_agent
+from app.agents.model_chain import make_model
 from app.analysis.symbols import match_decisions
 from app.config import get_settings
 from app.github.fetch import client_for, fetch_pr_context
@@ -182,9 +183,7 @@ async def persist(ctx: Context, repo: str, number: int, persist_enabled: bool = 
 
 def build_workflow() -> Workflow:
     s = get_settings()
-    if not s.model_screen:
-        raise RuntimeError("MODEL_SCREEN must be set")
-    judge = judge_agent.build_agent(s.model_screen)
+    judge = judge_agent.build_agent(make_model(s.screen_chain, "screen"))
     return Workflow(
         name=APP_NAME,
         edges=[

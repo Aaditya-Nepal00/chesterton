@@ -24,8 +24,10 @@ def health() -> dict:
         "status": "ok",
         "app_name": settings.app_name,
         "gemini_backend": settings.gemini_backend,
-        "model_screen": settings.model_screen,
-        "model_main": settings.model_main,
+        "model_screen": settings.screen_chain[0],
+        "model_main": settings.main_chain[0],
+        "model_screen_chain": settings.screen_chain,
+        "model_main_chain": settings.main_chain,
         "github_app_configured": settings.github_app_configured,
     }
 

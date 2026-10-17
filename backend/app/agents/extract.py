@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from google.adk import Agent
+from google.adk.models.base_llm import BaseLlm
 
 from app.agents.common import LLM_RETRY, clip, format_diff_evidence, format_non_diff_evidence
 from app.models.analysis import DecisionList
@@ -45,7 +46,7 @@ def build_input(pr: PRContext, evidence: dict[str, dict]) -> str:
     )
 
 
-def build_agent(model: str) -> Agent:
+def build_agent(model: str | BaseLlm) -> Agent:
     return Agent(
         name="extract",
         model=model,

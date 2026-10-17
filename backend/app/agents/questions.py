@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from google.adk import Agent
+from google.adk.models.base_llm import BaseLlm
 
 from app.agents.common import LLM_RETRY, format_diff_evidence
 from app.models.analysis import Decision, QuestionSet, RationaleCheck
@@ -74,7 +75,7 @@ def build_input(
     return f"PR author: @{author}\n\n" + "\n\n".join(blocks)
 
 
-def build_agent(model: str) -> Agent:
+def build_agent(model: str | BaseLlm) -> Agent:
     return Agent(
         name="questions",
         model=model,

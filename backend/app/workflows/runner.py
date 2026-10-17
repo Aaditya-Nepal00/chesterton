@@ -67,7 +67,7 @@ async def run_workflow(
         "pr": pr,
         "trigger": trigger,
         "actions_run_url": settings.actions_run_url,
-        "models": {"screen": settings.model_screen, "main": settings.model_main},
+        "model_chains": {"screen": settings.screen_chain, "main": settings.main_chain},
     }
     if persist:
         await store.start_run(run_id, meta)
