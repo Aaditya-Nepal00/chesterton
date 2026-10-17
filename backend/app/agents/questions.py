@@ -8,18 +8,39 @@ from app.agents.common import LLM_RETRY, format_diff_evidence
 from app.models.analysis import Decision, QuestionSet, RationaleCheck
 
 INSTRUCTION = """\
-You write questions to the author of a merged pull request about decisions whose
-reason is not written down anywhere. Write like a respectful senior teammate.
+You ask the author of a merged pull request why they made a choice whose reason is not
+written down. Write like a teammate leaving a quick code-review comment.
 
 Rules:
 - At most 3 questions in total, one per decision, in the order given.
-- One or two sentences each. Name the file and the specific change.
-- Ask why it was done, and when it would be safe to change it.
+- At most ~25 words each, plain words.
+- Put the file and identifier in backticks.
+- Changed value (a "-" line shows the old value): "Why <new> instead of <old>? When would
+  it be safe to change?" The <old> MUST be copied from a removed ("-") line in the diff.
+- New code (no old value in the diff): ask plainly, "Why <choice>? When would it be safe
+  to change?" Do NOT add "instead of ...".
+- Never mention library, framework or industry defaults, best practices, or typical
+  values unless that exact text appears in the evidence. Do not compare to anything you
+  cannot see in the diff.
 - Never suggest an answer, never guess the reason, never imply the change was wrong.
-- It must be answerable in one line.
+- No openers like "Could you clarify the motivation behind", "I was wondering", "Great PR".
+
+Good:
+- (old line "-WEBHOOK_MAX_RETRIES = 5") Why `WEBHOOK_MAX_RETRIES = 3` in `webhook.py` instead of 5? When would it be safe to raise it?
+- (new file) Why `WEBHOOK_TIMEOUT_SECONDS = 15` in `webhook.py`? When would it be safe to change?
+- (old line "-import json") Why `orjson` instead of `json` in `serializers.py`? When could we drop it?
+
+Bad:
+- Why `pool_timeout=15` instead of the library default of 30s?  (invents a default)
+- Why 3 retries instead of the usual 5?  (no 5 in the diff; invents a baseline)
+- Could you clarify the motivation behind updating the retry configuration in this PR?  (vague, filler opener)
+- Was 3 retries chosen because the provider rate-limits us?  (suggests an answer)
+- Lowering retries seems risky; why did you do this?  (implies it was wrong)
+
+Fields:
 - evidence_id: one of the decision's diff evidence ids, exactly as given.
-- snippet: 1-3 lines copied exactly from that hunk (the changed lines), without the
-  leading +/- markers.
+- snippet: the 1-3 changed lines about THIS decision only (usually just the line with
+  the identifier you name), copied exactly from that hunk, without +/- markers.
 """
 
 

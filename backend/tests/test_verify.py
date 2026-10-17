@@ -140,10 +140,40 @@ def test_render_comment_marker_and_footer():
         )
     ]
     rendered, _ = verify_questions(qs, ["D1"], [D1], EV, PR_URL)
-    md = render_comment(rendered, author="dana", run_id="r123")
-    assert md.splitlines()[0] == "<!-- chesterton:questions run_id=r123 -->"
-    assert "@dana" in md and "1. Why 3 retries" in md
-    assert "one change in this PR looks like a deliberate choice" in md
+    md = render_comment(rendered, pr=42, run_id="r123")
+    assert md.splitlines()[0] == "<!-- chesterton:questions pr=42 run_id=r123 -->"
+    assert md.splitlines()[1] == "Quick question before this context fades:"
+    assert "1. Why 3 retries" in md
     assert "payments/webhook.py:13" in md and "```python" in md
     assert md.rstrip().endswith(FOOTER)
-    assert render_comment([], author="dana", run_id="r") is None
+    assert render_comment([], pr=42, run_id="r") is None
+
+
+def test_self_evident_needs_a_note_but_no_quote_and_is_not_a_gap():
+    checks = [
+        RationaleCheck(
+            decision_id="D1",
+            status="self_evident",
+            note="Python 3.8 reached end of life in October 2024.",
+        ),
+        RationaleCheck(decision_id="D2", status="self_evident", note="obvious"),
+    ]
+    out = verify_analysis([D1, D2], checks, EV)
+    assert [r.status for r in out.rationale] == ["self_evident", "missing"]
+    assert out.gaps == ["D2"]
+    assert any("self_evident for D2 has no explanatory note" in n for n in out.notes)
+
+
+def test_self_evident_with_bogus_quote_keeps_status_but_drops_quote():
+    checks = [
+        RationaleCheck(
+            decision_id="D1",
+            status="self_evident",
+            reason_quote="not in any text here",
+            evidence_ids=["pr:body"],
+            note="Security fix for CVE-2026-1234 linked.",
+        ),
+    ]
+    out = verify_analysis([D1], checks, EV)
+    assert out.rationale[0].status == "self_evident"
+    assert out.rationale[0].reason_quote is None and out.gaps == []

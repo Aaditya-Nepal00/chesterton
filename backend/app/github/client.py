@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 API = "https://api.github.com"
 CACHE_DIR = REPO_ROOT / "backend" / ".cache" / "github"
 _MAX_RATE_WAIT_S = 60
+_MAX_5XX_ATTEMPTS = 3
+
+
+def _backoff(attempt: int) -> float:
+    return 1.5 * (2 ** (attempt - 1))  # 1.5s, 3s
 
 
 class GitHubError(RuntimeError):
@@ -103,22 +108,54 @@ class GitHubClient:
             return max(0.0, reset - time.time()) + 1
         return None
 
-    async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
-        for attempt in (1, 2):
+    async def _request(
+        self, method: str, path: str, *, retry_5xx: bool = True, **kwargs
+    ) -> httpx.Response:
+        """One request with: a single wait-and-retry on rate limits (if the wait is short),
+        and up to 2 retries with backoff on 5xx / transport errors (unless retry_5xx=False,
+        used for non-idempotent writes whose caller checks for duplicates itself)."""
+        rate_retried = False
+        resp: httpx.Response | None = None
+        for attempt in range(1, _MAX_5XX_ATTEMPTS + 1):
             self.requests_made += 1
-            resp = await self._http.request(method, path, **kwargs)
+            try:
+                resp = await self._http.request(method, path, **kwargs)
+            except httpx.TransportError as exc:
+                if not retry_5xx or attempt == _MAX_5XX_ATTEMPTS:
+                    raise GitHubError(f"{method} {path}: {type(exc).__name__}") from exc
+                await asyncio.sleep(_backoff(attempt))
+                continue
             self._note_rate_limit(resp)
             wait = self._rate_wait(resp)
-            if wait is None:
-                return resp
-            if attempt == 2 or wait > _MAX_RATE_WAIT_S:
-                raise GitHubError(
-                    f"GitHub rate limited on {path} (HTTP {resp.status_code}); "
-                    f"retry in {int(wait)}s"
-                )
-            logger.warning("GitHub rate limited; waiting %.0fs then retrying once", wait)
-            await asyncio.sleep(wait)
-        raise AssertionError("unreachable")
+            if wait is not None:
+                if rate_retried or wait > _MAX_RATE_WAIT_S:
+                    raise GitHubError(
+                        f"GitHub rate limited on {path} (HTTP {resp.status_code}); "
+                        f"retry in {int(wait)}s"
+                    )
+                logger.warning("GitHub rate limited; waiting %.0fs then retrying once", wait)
+                rate_retried = True
+                await asyncio.sleep(wait)
+                continue
+            if resp.status_code >= 500 and retry_5xx and attempt < _MAX_5XX_ATTEMPTS:
+                logger.warning("GitHub %s %s -> HTTP %s; retrying", method, path, resp.status_code)
+                await asyncio.sleep(_backoff(attempt))
+                continue
+            return resp
+        assert resp is not None
+        return resp
+
+    async def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: Any = None,
+        params: dict | None = None,
+        retry_5xx: bool = True,
+    ) -> httpx.Response:
+        """Uncached request (used by the write client)."""
+        return await self._request(method, path, json=json, params=params, retry_5xx=retry_5xx)
 
     # --- public API ---
     async def graphql(self, query: str, variables: dict | None = None) -> dict:

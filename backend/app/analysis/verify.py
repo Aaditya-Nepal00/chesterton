@@ -6,6 +6,7 @@ rationale, actually contains the quoted text.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from app.analysis.evidence import (
@@ -14,11 +15,73 @@ from app.analysis.evidence import (
     is_diff_id,
     locate_snippet,
     normalize,
+    split_hunks,
     strip_diff_markers,
 )
 from app.models.analysis import Decision, Question, RationaleCheck, RenderedQuestion
 
+_BASELINE_CLAUSE = re.compile(
+    r"\s*,?\s*\b(?:instead of|rather than|compared to|compared with|versus|vs\.?)\b"
+    r"(?P<what>[^?;]*?)(?=\?|;|$)",
+    re.IGNORECASE,
+)
+_CLAIM_WORDS = re.compile(
+    r"\b(default|defaults|typical|typically|usual|usually|standard|industry|"
+    r"best practice|recommended|common)\b",
+    re.IGNORECASE,
+)
+_FILLER = {"the", "a", "an", "of", "previous", "old", "prior", "value", "values", "s", "to"}
+
+
+def _changed_old_text(entry: dict) -> str:
+    hunks = split_hunks(entry.get("text"))
+    return "\n".join(t for h in hunks for k, _, t in h.lines if k == "-")
+
+
+def _clause_supported(what: str, old_text: str, evidence_text: str) -> bool:
+    """An "instead of X" clause survives only if X is visible on a removed line, and
+    any default/typical-style claim word in it appears verbatim in the evidence."""
+    if not old_text.strip():
+        return False
+    for word in _CLAIM_WORDS.findall(what):
+        if word.lower() not in evidence_text.lower():
+            return False
+    tokens = [t for t in re.findall(r"[\w.]+", what.replace("`", "")) if t.lower() not in _FILLER]
+    return bool(tokens) and all(
+        re.search(rf"(?<![\w.]){re.escape(t)}(?![\w])", old_text) for t in tokens
+    )
+
+
+def enforce_baselines(text: str, entry: dict, snippet: str) -> tuple[str, bool]:
+    """Remove invented comparison baselines ("instead of the library default of 30s").
+
+    Returns (text, changed). If a default/typical claim remains that the evidence
+    doesn't contain, the question is replaced by a plain one built from the snippet.
+    """
+    old_text = _changed_old_text(entry)
+    evidence_text = entry.get("text") or ""
+    changed = False
+
+    def repl(m: re.Match) -> str:
+        nonlocal changed
+        if _clause_supported(m.group("what"), old_text, evidence_text):
+            return m.group(0)
+        changed = True
+        return ""
+
+    out = _BASELINE_CLAUSE.sub(repl, text)
+    leftover = [w for w in _CLAIM_WORDS.findall(out) if w.lower() not in evidence_text.lower()]
+    if leftover:
+        first = next((ln.strip() for ln in snippet.splitlines() if ln.strip()), "")
+        name = (entry.get("path") or "").rsplit("/", 1)[-1]
+        subject = f"`{first}`" + (f" in `{name}`" if name else "")
+        return f"Why {subject}? When would it be safe to change?", True
+    out = re.sub(r"\s+\?", "?", re.sub(r"\s{2,}", " ", out)).strip()
+    return out, changed
+
+
 MIN_QUOTE_WORDS = 4  # a "reason" shorter than this ("fix", "tweak retries") can't be one
+MIN_SELF_EVIDENT_NOTE_WORDS = 3
 MAX_QUESTIONS = 3
 
 
@@ -88,6 +151,18 @@ def verify_analysis(
                         "note": (c.note + " [verifier: quote not found in cited evidence]").strip(),
                     }
                 )
+        elif c.status == "self_evident":
+            # No quote needed, but the model must say why it's common knowledge.
+            if len(c.note.split()) < MIN_SELF_EVIDENT_NOTE_WORDS:
+                notes.append(
+                    f"self_evident for {c.decision_id} has no explanatory note; "
+                    "downgraded -> missing"
+                )
+                c = c.model_copy(
+                    update={"status": "missing", "reason_quote": None, "evidence_ids": []}
+                )
+            elif c.reason_quote and not _quote_supported(c, evidence):
+                c = c.model_copy(update={"reason_quote": None, "evidence_ids": []})
         else:
             c = c.model_copy(update={"reason_quote": None, "evidence_ids": []})
         rationale[c.decision_id] = c
@@ -142,10 +217,15 @@ def verify_questions(
                 f"question for {q.decision_id}: snippet not found in {eid}; "
                 "used the hunk's changed lines"
             )
+        text, rewritten = enforce_baselines(q.text.strip(), entry, snippet)
+        if rewritten:
+            notes.append(
+                f"question for {q.decision_id}: removed a comparison not visible in the diff"
+            )
         out.append(
             RenderedQuestion(
                 decision_id=q.decision_id,
-                text=q.text.strip(),
+                text=text,
                 evidence_id=eid,
                 snippet=snippet,
                 path=entry.get("path"),

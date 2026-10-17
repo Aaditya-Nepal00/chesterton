@@ -1,0 +1,73 @@
+name: Chesterton
+description: Asks why at merge time and keeps the answer next to the code.
+author: Aaditya-Nepal00
+branding:
+  icon: help-circle
+  color: blue
+
+inputs:
+  gemini-api-key:
+    description: Gemini API key (Google AI Studio).
+    required: true
+  gcp-sa-key:
+    description: Service-account key JSON with Firestore access (roles/datastore.user).
+    required: true
+  gcp-project:
+    description: Google Cloud project id that holds the Firestore database.
+    required: true
+  app-id:
+    description: GitHub App id. Comments and record PRs are posted as this App.
+    required: true
+  app-private-key:
+    description: GitHub App private key (PEM contents).
+    required: true
+  model-main:
+    description: Gemini model for extraction, rationale, questions and answers.
+    required: false
+    default: gemini-3.8-flash
+  model-screen:
+    description: Gemini model for screening and the guard judge.
+    required: false
+    default: gemini-3.5-flash-lite
+
+runs:
+  using: composite
+  steps:
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v10.2.0
+
+    - name: Install Chesterton
+      shell: bash
+      run: uv sync --frozen --no-dev --project "${{ github.action_path }}/backend"
+
+    - name: Write service-account key
+      shell: bash
+      env:
+        SA_KEY: ${{ inputs.gcp-sa-key }}
+      run: |
+        umask 077
+        key_file="$RUNNER_TEMP/chesterton-sa.json"
+        printf '%s' "$SA_KEY" > "$key_file"
+        chmod 600 "$key_file"
+        if ! python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "$key_file" 2>/dev/null; then
+          echo "::error::gcp-sa-key is not valid JSON"
+          exit 1
+        fi
+        echo "GOOGLE_APPLICATION_CREDENTIALS=$key_file" >> "$GITHUB_ENV"
+
+    - name: Run Chesterton
+      shell: bash
+      env:
+        GOOGLE_GENAI_USE_VERTEXAI: "FALSE"
+        GOOGLE_API_KEY: ${{ inputs.gemini-api-key }}
+        GOOGLE_CLOUD_PROJECT: ${{ inputs.gcp-project }}
+        GITHUB_APP_ID: ${{ inputs.app-id }}
+        GITHUB_APP_PRIVATE_KEY: ${{ inputs.app-private-key }}
+        MODEL_MAIN: ${{ inputs.model-main }}
+        MODEL_SCREEN: ${{ inputs.model-screen }}
+      run: uv run --frozen --no-dev --project "${{ github.action_path }}/backend" python -m app.action
+
+    - name: Remove service-account key
+      if: always()
+      shell: bash
+      run: rm -f "$RUNNER_TEMP/chesterton-sa.json"

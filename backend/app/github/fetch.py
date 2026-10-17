@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from app.analysis.signals import file_priority, is_generated, is_lockfile
 from app.config import get_settings
 from app.github.auth import AppAuth, TokenSelector
-from app.github.client import GitHubClient
+from app.github.client import CACHE_DIR, GitHubClient
 from app.models.pr import ChangedFile, Comment, Commit, LinkedIssue, PRContext
 
 MAX_LINES_PER_FILE = 200
@@ -20,7 +20,7 @@ PR_QUERY = f"""
 query($owner: String!, $name: String!, $number: Int!) {{
   repository(owner: $owner, name: $name) {{
     pullRequest(number: $number) {{
-      number title body url merged mergedAt baseRefName
+      number title body url merged mergedAt baseRefName headRefName state
       {_ACTOR}
       labels(first: 20) {{ nodes {{ name }} }}
       commits(first: 100) {{
@@ -135,8 +135,14 @@ def _make_selector() -> TokenSelector:
 
 
 async def client_for(repo: str, *, refresh: bool = False) -> GitHubClient:
-    token = await _make_selector().token_for(repo)
-    return GitHubClient(token, refresh=refresh)
+    """Read client for
+    epo. The disk cache is only used for read-only public repos
+        outside Actions; the writable repo changes under us (new pushes, new comments)."""
+    settings = get_settings()
+    selector = _make_selector()
+    token = await selector.token_for(repo)
+    cache = not (selector.uses_app(repo) or settings.github_actions)
+    return GitHubClient(token, refresh=refresh, cache_dir=CACHE_DIR if cache else None)
 
 
 async def fetch_pr_files(
@@ -147,7 +153,12 @@ async def fetch_pr_files(
 
 
 async def fetch_pr_context(
-    repo: str, number: int, *, refresh: bool = False, gh: GitHubClient | None = None
+    repo: str,
+    number: int,
+    *,
+    refresh: bool = False,
+    gh: GitHubClient | None = None,
+    require_merged: bool = True,
 ) -> PRContext:
     owner, name = _split_repo(repo)
     own = gh is None
@@ -157,7 +168,7 @@ async def fetch_pr_context(
         pr = (data.get("repository") or {}).get("pullRequest")
         if not pr:
             raise ValueError(f"{repo}#{number} not found")
-        if not pr.get("merged"):
+        if require_merged and not pr.get("merged"):
             raise ValueError(f"{repo}#{number} is not merged")
         files, truncated = await fetch_pr_files(gh, repo, number)
     finally:
@@ -224,6 +235,8 @@ async def fetch_pr_context(
         author_is_bot=_is_bot(pr.get("author")),
         merged_at=_dt(pr.get("mergedAt")),
         base_branch=pr.get("baseRefName"),
+        head_ref=pr.get("headRefName"),
+        state=pr.get("state"),
         body=pr.get("body") or "",
         labels=[label["name"] for label in pr["labels"]["nodes"]],
         files=files,

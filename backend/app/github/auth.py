@@ -30,6 +30,14 @@ def make_app_jwt(app_id: str, private_key: str, now: float | None = None) -> str
     )
 
 
+def normalize_pem(key: str) -> str:
+    """Accept a PEM pasted with literal "\\n" escapes (common for single-line secrets)."""
+    key = key.strip()
+    if "\\n" in key and "\n" not in key:
+        key = key.replace("\\n", "\n")
+    return key + "\n"
+
+
 def resolve_key_path(raw: str) -> Path:
     path = Path(raw).expanduser()
     return path if path.is_absolute() else REPO_ROOT / path
@@ -53,8 +61,10 @@ class AppAuth:
 
     @classmethod
     def from_settings(cls, settings: Settings) -> AppAuth | None:
-        if not (settings.github_app_id and settings.github_app_private_key_path):
+        if not settings.github_app_configured:
             return None
+        if settings.github_app_private_key:
+            return cls(settings.github_app_id, normalize_pem(settings.github_app_private_key))
         path = resolve_key_path(settings.github_app_private_key_path)
         if not path.is_file():
             raise GitHubAuthError(f"GitHub App private key file not found at {path}")
@@ -102,15 +112,15 @@ def _parse_github_time(value: str) -> float:
 
 
 class TokenSelector:
-    """Installation token for GITHUB_DEMO_REPO (when the App is configured), else GITHUB_TOKEN."""
+    """App installation token for the writable repo (demo repo locally, the workflow's repo
+    in Actions); GITHUB_TOKEN (read-only PAT) for everything else."""
 
     def __init__(self, settings: Settings, app_auth: AppAuth | None = None):
         self.settings = settings
         self.app_auth = app_auth
 
     def uses_app(self, repo: str) -> bool:
-        demo = self.settings.github_demo_repo
-        return bool(self.app_auth and demo and repo.lower() == demo.lower())
+        return bool(self.app_auth and self.settings.can_write(repo))
 
     async def token_for(self, repo: str) -> str | None:
         if self.uses_app(repo):

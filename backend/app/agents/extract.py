@@ -23,6 +23,8 @@ Rules:
   input, in the form diff:<path>#<n>. Only cite ids that appear in the input.
 - Never invent decisions. Ignore formatting, renames with no behaviour change, typo
   fixes, docs, comments, and tests that merely cover the change.
+- One decision per independent choice: a retry count and a timeout are two decisions
+  even if they sit next to each other. Cite only the hunk(s) for that choice.
 - If a change is only a mechanical consequence of another decision in this PR (e.g.
   removing a version conditional or CI matrix entry after dropping that version), fold
   it into that decision's evidence instead of listing it separately.

@@ -10,7 +10,7 @@ Graph (route names in quotes; a tuple fans out; JoinNode waits for both):
                                              -{default}-> rationale (parallel worker) -> verify
   verify -{"gaps"}-> questions_input -> questions -> verify_questions -> render_comment
          -{default}-> render_comment
-  render_comment -> persist
+  render_comment -> persist -> post_questions   (posts only when state.post is True)
 
 Shared data travels through session state (the PR context, signals, evidence
 index, decisions); node outputs carry what the next node needs plus a trace summary.
@@ -18,16 +18,12 @@ index, decisions); node outputs carry what the next node needs plus a trace summ
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from google.adk import Context, Event, Runner, Workflow
-from google.adk.apps import App
-from google.adk.sessions import InMemorySessionService
+from google.adk import Context, Event, Workflow
 from google.adk.workflow import DEFAULT_ROUTE, JoinNode
-from google.genai import types
 
 from app.agents import extract as extract_agent
 from app.agents import questions as questions_agent
@@ -36,8 +32,10 @@ from app.agents import screen as screen_agent
 from app.analysis import signals as sig
 from app.analysis import verify as ver
 from app.analysis.evidence import build_evidence_index, is_diff_id
+from app.analysis.symbols import paths_and_symbols, symbols_for_snippet
 from app.config import get_settings
 from app.github.fetch import fetch_pr_context
+from app.github.write import GitHubWriter
 from app.models.analysis import (
     AnalysisResult,
     Decision,
@@ -49,11 +47,14 @@ from app.models.analysis import (
     Signals,
 )
 from app.models.pr import PRContext
-from app.models.trace import TraceEvent, TracePlugin, TraceRecorder, set_recorder, trace_started
+from app.models.records import QuestionItem, QuestionSetDoc
+from app.models.trace import TraceEvent, TraceRecorder, trace_started
 from app.render.pr_comment import render_comment as render_markdown
 from app.store import firestore as store
+from app.workflows.runner import RunOutcome, run_workflow
 
 APP_NAME = "analyze_pr"
+MAX_RATIONALE_DECISIONS = 3  # free-tier budget: extract + 3 rationale + questions = 5 calls
 
 
 def _pr(ctx: Context) -> PRContext:
@@ -131,6 +132,10 @@ async def plan_rationale(ctx: Context, node_input):
     renumbered = [d.model_copy(update={"id": f"D{i}"}) for i, d in enumerate(raw, 1)]
     evidence = ctx.state["evidence"]
     kept, notes = ver.verify_decisions(renumbered, evidence)
+    if len(kept) > MAX_RATIONALE_DECISIONS:  # at most 3 questions are asked anyway
+        dropped = [d.id for d in kept[MAX_RATIONALE_DECISIONS:]]
+        notes.append(f"rationale checked for top {MAX_RATIONALE_DECISIONS} only; skipped {dropped}")
+        kept = kept[:MAX_RATIONALE_DECISIONS]
     ctx.state["decisions"] = [d.model_dump(mode="json") for d in kept]
     ctx.state["decision_notes"] = notes
     items = [rationale_agent.build_item(d, evidence) for d in kept]
@@ -216,7 +221,7 @@ async def render_comment(ctx: Context, run_id: str):
         rationale=v["rationale"],
         verifier_notes=v["notes"] + list(ctx.state.get("question_notes") or []),
         questions=questions,
-        comment_markdown=render_markdown(questions, author=pr.author, run_id=run_id),
+        comment_markdown=render_markdown(questions, pr=pr.number, run_id=run_id),
         models=_models(),
         created_at=datetime.now(UTC),
     )
@@ -252,15 +257,89 @@ async def finish_skipped(ctx: Context, run_id: str, repo: str, number: int):
 
 async def persist(ctx: Context, node_input, persist_enabled: bool = True):
     trace_started(ctx)
+    result = AnalysisResult.model_validate(node_input)
+    ctx.state["run_status"] = result.status
+    ctx.state["summary"] = (
+        f"{result.status}"
+        + (f" ({result.skip_reason})" if result.skip_reason else "")
+        + f", {len(result.questions)} questions"
+    )
     if not persist_enabled:
         return {"summary": "persist disabled (--no-persist)"}
-    result = AnalysisResult.model_validate(node_input)
-    paths = await store.save_analysis(
-        result,
-        {"models": result.models, "trigger": "cli", "started_at": ctx.state.get("started_at")},
+    path = await store.save_analysis(result)
+    ctx.state["persisted"] = [path]
+    return {"summary": f"wrote {path}"}
+
+
+def build_question_set(
+    result: AnalysisResult, pr: PRContext, evidence: dict[str, dict], comment: dict | None
+) -> QuestionSetDoc:
+    decisions = {d.id: d for d in result.decisions}
+    items = []
+    for i, q in enumerate(result.questions, 1):
+        d = decisions.get(q.decision_id)
+        paths, hunk_symbols = paths_and_symbols(d.diff_evidence if d else [q.evidence_id], evidence)
+        symbols = symbols_for_snippet(q.path, q.snippet, hunk_symbols)
+        items.append(
+            QuestionItem(
+                qid=f"Q{i}",
+                decision_id=q.decision_id,
+                text=q.text,
+                evidence_id=q.evidence_id,
+                paths=paths,
+                symbols=symbols,
+                decision_summary=d.summary if d else "",
+                category=d.category if d else "other",
+                path=q.path,
+                line=q.line,
+                evidence_url=q.url,
+                snippet=q.snippet,
+            )
+        )
+    return QuestionSetDoc(
+        repo=result.repo,
+        pr=result.number,
+        pr_url=result.url,
+        pr_title=result.title,
+        author=pr.author,
+        comment_id=comment["id"] if comment else None,
+        comment_url=comment["html_url"] if comment else None,
+        run_id=result.run_id,
+        questions=items,
     )
-    ctx.state["persisted"] = paths
-    return {"summary": "wrote " + ", ".join(paths)}
+
+
+async def post_questions(
+    ctx: Context, post: bool = False, persist_enabled: bool = True, dry_run: bool = False
+):
+    """Post the questions comment as the App (only when state.post is True)."""
+    trace_started(ctx)
+    result = AnalysisResult.model_validate(ctx.state["result"])
+    pr = _pr(ctx) if ctx.state.get("pr") else None
+    if not result.comment_markdown or pr is None:
+        return {"summary": "nothing to post"}
+    if pr.author_is_bot or (pr.head_ref or "").startswith("chesterton/"):
+        return {"summary": "not posting: bot author or chesterton/ branch"}
+    if not post:
+        ctx.state["planned_writes"] = [
+            {"action": "post_issue_comment", "pr": pr.number, "body": result.comment_markdown}
+        ]
+        return {"summary": "posting disabled" + (" (dry run)" if dry_run else "")}
+
+    async with await GitHubWriter.for_repo(pr.repo) as gh:
+        existing = await gh.find_comment_with_marker(pr.number, "questions")
+        if existing:
+            ctx.state["questions_comment_url"] = existing["html_url"]
+            ctx.state["summary"] += f"; questions comment already present {existing['html_url']}"
+            return {"summary": f"already posted: {existing['html_url']}"}
+        comment = await gh.post_issue_comment(pr.number, result.comment_markdown, kind="questions")
+    ctx.state["questions_comment_url"] = comment["html_url"]
+    ctx.state["run_status"] = "questions_posted"
+    ctx.state["summary"] += f"; posted {comment['html_url']}"
+    qs = build_question_set(result, pr, ctx.state["evidence"], comment)
+    if persist_enabled:
+        await store.save_question_set(qs)
+    return {"summary": f"posted {comment['html_url']}"}
 
 
 # --- graph ------------------------------------------------------------------
@@ -291,6 +370,7 @@ def build_workflow() -> Workflow:
             (verify, {"gaps": questions_input, DEFAULT_ROUTE: render_comment}),
             (questions_input, questions, verify_questions, render_comment, persist),
             (finish_skipped, persist),
+            (persist, post_questions),
         ],
     )
 
@@ -298,8 +378,33 @@ def build_workflow() -> Workflow:
 # --- runner -----------------------------------------------------------------
 
 
-def new_run_id() -> str:
-    return f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:6]}"
+async def run(
+    repo: str,
+    number: int,
+    *,
+    post: bool = False,
+    persist: bool = True,
+    refresh: bool = False,
+    dry_run: bool = False,
+    trigger: str = "cli",
+    on_trace: Callable[[TraceEvent], None] | None = None,
+) -> RunOutcome:
+    return await run_workflow(
+        kind="analyze",
+        workflow=build_workflow(),
+        repo=repo,
+        pr=number,
+        state={
+            "refresh": refresh,
+            "persist_enabled": persist and not dry_run,
+            "post": post and not dry_run,
+            "dry_run": dry_run,
+            "started_at": datetime.now(UTC).isoformat(),
+        },
+        trigger=trigger,
+        persist=persist and not dry_run,
+        on_trace=on_trace,
+    )
 
 
 async def run_analysis(
@@ -310,57 +415,12 @@ async def run_analysis(
     refresh: bool = False,
     on_trace: Callable[[TraceEvent], None] | None = None,
 ) -> tuple[AnalysisResult, dict[str, Any], TraceRecorder]:
-    run_id = new_run_id()
-    recorder = TraceRecorder(run_id, sink=on_trace)
-    set_recorder(recorder)
-    try:
-        app = App(name=APP_NAME, root_agent=build_workflow(), plugins=[TracePlugin()])
-        sessions = InMemorySessionService()
-        runner = Runner(app=app, session_service=sessions)
-        session = await sessions.create_session(
-            app_name=APP_NAME,
-            user_id="cli",
-            state={
-                "repo": repo,
-                "number": number,
-                "refresh": refresh,
-                "persist_enabled": persist,
-                "run_id": run_id,
-                "started_at": datetime.now(UTC).isoformat(),
-            },
-        )
-        run_error: Exception | None = None
-        try:
-            async for event in runner.run_async(
-                user_id="cli",
-                session_id=session.id,
-                new_message=types.Content(role="user", parts=[types.Part(text=f"{repo}#{number}")]),
-            ):
-                recorder.on_adk_event(event)
-        except Exception as exc:  # surfaced after recording what we have
-            run_error = exc
-        final = await sessions.get_session(app_name=APP_NAME, user_id="cli", session_id=session.id)
-    finally:
-        set_recorder(None)
-
-    errors = [e for e in recorder.events if e.status == "error"]
-    stats = {
-        "llm_calls": len(recorder.llm_calls),
-        "llm_failed_calls": sum(1 for c in recorder.llm_calls if not c.ok),
-        "llm_calls_detail": [c.model_dump() for c in recorder.llm_calls],
-        "node_errors": [e.model_dump(mode="json") for e in errors],
-        "node_durations_ms": recorder.durations(),
-        "persisted": final.state.get("persisted") if final else None,
-    }
-    result_data = final.state.get("result") if final else None
-    if result_data is None:
-        detail = run_error or (errors[-1].summary if errors else "workflow ended without a result")
-        raise RuntimeError(f"analysis of {repo}#{number} failed: {detail}")
-    result = AnalysisResult.model_validate(result_data)
-    if persist:
-        stats["events_path"] = await store.save_run_stats(
-            run_id,
-            {k: v for k, v in stats.items() if k != "persisted"},
-            recorder.events,
-        )
-    return result, stats, recorder
+    """CLI/backfill entry point: analyze only, never posts."""
+    outcome = await run(repo, number, persist=persist, refresh=refresh, on_trace=on_trace)
+    data = outcome.state.get("result")
+    if data is None:
+        raise RuntimeError(f"analysis of {repo}#{number} failed: {outcome.summary}")
+    stats = {**outcome.stats, "persisted": outcome.state.get("persisted")}
+    if outcome.run_doc:
+        stats["events_path"] = f"{outcome.run_doc}/events"
+    return AnalysisResult.model_validate(data), stats, outcome.recorder

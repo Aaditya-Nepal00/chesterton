@@ -9,6 +9,7 @@ run lives in a ContextVar, which asyncio copies into the tasks ADK creates.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import Callable
@@ -196,7 +197,27 @@ class TracePlugin(BasePlugin):
         return None
 
     async def on_model_error_callback(self, *, callback_context, llm_request, error):
-        self._record(
-            callback_context, getattr(llm_request, "model", None), False, _short(str(error))
-        )
+        from app.agents.common import QuotaExhausted, is_long_quota, quota_retry_delay
+
+        model = getattr(llm_request, "model", None)
+        self._record(callback_context, model, False, _error_summary(error))
+        if is_long_quota(error):
+            # Raising here makes ADK surface a RuntimeError, which LLM_RETRY does not
+            # match: a daily quota can't be fixed by retrying in 5-20 seconds.
+            delay = quota_retry_delay(error)
+            wait = f"; retry in ~{delay / 3600:.1f}h" if delay else ""
+            raise QuotaExhausted(f"Gemini quota exhausted for {model}{wait} (not retrying)")
+        delay = quota_retry_delay(error)
+        if delay:
+            # Per-minute limit: wait as long as Gemini asks (bounded by is_long_quota)
+            # before LLM_RETRY's own short backoff, so the retry isn't wasted.
+            await asyncio.sleep(delay + 1)
         return None
+
+
+def _error_summary(error: BaseException) -> str:
+    code, status = getattr(error, "code", None), getattr(error, "status", None)
+    message = getattr(error, "message", None)
+    if code and message:
+        return _short(f"{code} {status}: {message}", 160)
+    return _short(str(error), 160)

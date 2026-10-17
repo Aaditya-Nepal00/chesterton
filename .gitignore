@@ -17,3 +17,9 @@ frontend/dist/
 *.local
 .DS_Store
 firebase-debug.log
+
+# Credentials (never commit)
+*-sa.json
+sa.json
+*service-account*.json
+*credentials*.json

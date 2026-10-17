@@ -17,6 +17,34 @@ LLM_RETRY = RetryConfig(
     exceptions=["_ResourceExhaustedError", "ServerError"],
 )
 MAX_PARALLEL_LLM = 2
+LONG_QUOTA_WAIT_S = 120  # a 429 asking us to wait longer than this is a daily quota
+
+
+class QuotaExhausted(Exception):
+    """A 429 that retrying within this run cannot fix (e.g. the free-tier daily quota)."""
+
+
+def quota_retry_delay(error: BaseException) -> float | None:
+    """Seconds Gemini asks us to wait (RetryInfo.retryDelay) on a 429, if present."""
+    if getattr(error, "code", None) != 429:
+        return None
+    details = getattr(error, "details", None) or {}
+    for d in (details.get("error") or details).get("details") or []:
+        if isinstance(d, dict) and str(d.get("@type", "")).endswith("RetryInfo"):
+            raw = str(d.get("retryDelay", "")).rstrip("s")
+            try:
+                return float(raw)
+            except ValueError:
+                return None
+    return None
+
+
+def is_long_quota(error: BaseException) -> bool:
+    if getattr(error, "code", None) != 429:
+        return False
+    delay = quota_retry_delay(error)
+    return "PerDay" in str(error) or (delay is not None and delay > LONG_QUOTA_WAIT_S)
+
 
 MAX_EVIDENCE_CHARS = 1500
 MAX_CONTEXT_CHARS = 24000

@@ -74,7 +74,7 @@ class DecisionList(BaseModel):
         return list(v or [])[:5]
 
 
-RationaleStatus = Literal["found", "partial", "missing"]
+RationaleStatus = Literal["found", "partial", "missing", "self_evident"]
 
 
 class RationaleCheck(BaseModel):
@@ -86,7 +86,10 @@ class RationaleCheck(BaseModel):
     evidence_ids: list[str] = Field(
         default_factory=list, description="Evidence ids containing reason_quote."
     )
-    note: str = ""
+    note: str = Field(
+        default="",
+        description="One line. Required for self_evident: state the common-knowledge reason.",
+    )
 
 
 class Question(BaseModel):

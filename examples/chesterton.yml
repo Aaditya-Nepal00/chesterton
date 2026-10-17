@@ -1,0 +1,47 @@
+# Copy to .github/workflows/chesterton.yml in your repo.
+# Needs repo secrets GOOGLE_API_KEY, GCP_SA_KEY, CHESTERTON_APP_ID,
+# CHESTERTON_APP_PRIVATE_KEY and the repo variable GCP_PROJECT.
+name: Chesterton
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: What to run
+        type: choice
+        options: [analyze, guard]
+        required: true
+      pr:
+        description: Pull request number
+        type: string
+        required: true
+
+# Chesterton writes as its GitHub App, not with GITHUB_TOKEN.
+permissions:
+  contents: read
+
+concurrency:
+  group: chesterton-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  chesterton:
+    if: >-
+      (github.event_name != 'issue_comment' ||
+        (github.event.issue.pull_request && github.event.comment.user.type != 'Bot')) &&
+      (github.event_name != 'pull_request' ||
+        !startsWith(github.event.pull_request.head.ref, 'chesterton/'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: Aaditya-Nepal00/chesterton@main
+        with:
+          gemini-api-key: ${{ secrets.GOOGLE_API_KEY }}
+          gcp-sa-key: ${{ secrets.GCP_SA_KEY }}
+          gcp-project: ${{ vars.GCP_PROJECT }}
+          app-id: ${{ secrets.CHESTERTON_APP_ID }}
+          app-private-key: ${{ secrets.CHESTERTON_APP_PRIVATE_KEY }}

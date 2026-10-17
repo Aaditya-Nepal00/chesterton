@@ -1,4 +1,8 @@
-"""Application settings, loaded from the repo-root .env file."""
+"""Application settings.
+
+Environment variables always work on their own (GitHub Actions has no .env).
+Locally, the repo-root .env is read too if it exists; real env vars win over it.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +19,7 @@ ENV_FILE = REPO_ROOT / ".env"
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=ENV_FILE,
+        env_file=ENV_FILE,  # optional: silently skipped when the file doesn't exist
         env_file_encoding="utf-8",
         env_ignore_empty=True,  # blank values fall back to the default (None)
         extra="ignore",
@@ -28,17 +32,25 @@ class Settings(BaseSettings):
     google_genai_use_vertexai: bool = False
     google_api_key: str | None = None  # required when not using Vertex AI
     google_cloud_location: str = "global"
+    google_application_credentials: str | None = None  # SA key file for Firestore (Actions)
     firestore_database: str = "(default)"
     model_screen: str | None = None
     model_main: str | None = None
 
     # GitHub
-    github_token: str | None = None
+    github_token: str | None = None  # read-only PAT for public repos (local only)
     github_app_id: str | None = None
-    github_app_private_key_path: str | None = None
+    github_app_private_key: str | None = None  # key contents (Actions)
+    github_app_private_key_path: str | None = None  # key file (local)
     github_webhook_secret: str | None = None
     github_demo_repo: str | None = None
     smee_url: str | None = None
+
+    # Set by the GitHub Actions runner
+    github_actions: bool = False
+    github_repository: str | None = None
+    github_server_url: str = "https://github.com"
+    github_run_id: str | None = None
 
     frontend_dist: Path = REPO_ROOT / "frontend" / "dist"
 
@@ -48,11 +60,32 @@ class Settings(BaseSettings):
 
     @property
     def github_app_configured(self) -> bool:
-        return bool(self.github_app_id and self.github_app_private_key_path)
+        return bool(
+            self.github_app_id and (self.github_app_private_key or self.github_app_private_key_path)
+        )
+
+    @property
+    def write_repos(self) -> set[str]:
+        """The only repos Chesterton may write to (lower-cased).
+
+        In GitHub Actions: the repository running the workflow. Locally: the demo repo.
+        """
+        repo = self.github_repository if self.github_actions else self.github_demo_repo
+        return {repo.lower()} if repo else set()
+
+    def can_write(self, repo: str) -> bool:
+        return repo.lower() in self.write_repos
+
+    @property
+    def actions_run_url(self) -> str | None:
+        if self.github_actions and self.github_repository and self.github_run_id:
+            repo_url = f"{self.github_server_url}/{self.github_repository}"
+            return f"{repo_url}/actions/runs/{self.github_run_id}"
+        return None
 
 
 def export_genai_env(settings: Settings) -> None:
-    """Export the variables that ADK and google-genai read from os.environ."""
+    """Export the variables that ADK, google-genai and google-auth read from os.environ."""
     os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = (
         "TRUE" if settings.google_genai_use_vertexai else "FALSE"
     )
@@ -61,6 +94,8 @@ def export_genai_env(settings: Settings) -> None:
         os.environ["GOOGLE_CLOUD_PROJECT"] = settings.google_cloud_project
     if settings.google_api_key:
         os.environ["GOOGLE_API_KEY"] = settings.google_api_key
+    if settings.google_application_credentials:
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = settings.google_application_credentials
 
 
 @lru_cache

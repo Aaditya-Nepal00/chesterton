@@ -54,6 +54,8 @@ class PRContext(BaseModel):
     author_is_bot: bool = False
     merged_at: datetime | None = None
     base_branch: str | None = None
+    head_ref: str | None = None
+    state: str | None = None  # OPEN / CLOSED / MERGED
     body: str = ""
     labels: list[str] = Field(default_factory=list)
     files: list[ChangedFile] = Field(default_factory=list)
