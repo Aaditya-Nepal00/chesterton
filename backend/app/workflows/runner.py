@@ -17,7 +17,7 @@ from google.adk.apps import App
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from app.agents.common import is_daily_quota_stop
+from app.agents.common import is_budget_stop, is_daily_quota_stop
 from app.config import get_settings
 from app.models.trace import TraceEvent, TracePlugin, TraceRecorder, set_recorder
 from app.store import firestore as store
@@ -88,7 +88,7 @@ async def run_workflow(
 
     set_recorder(recorder)
     error: str | None = None
-    quota_stop = False
+    quota_stop = budget_stop = False
     final_state: dict[str, Any] = {}
     try:
         app = App(name=workflow.name, root_agent=workflow, plugins=[TracePlugin()])
@@ -107,6 +107,7 @@ async def run_workflow(
         except Exception as exc:  # recorded below; the trace keeps what happened
             error = f"{type(exc).__name__}: {str(exc)[:300]}"
             quota_stop = is_daily_quota_stop(exc)
+            budget_stop = is_budget_stop(exc)
         final = await sessions.get_session(
             app_name=workflow.name, user_id="chesterton", session_id=session.id
         )
@@ -131,6 +132,10 @@ async def run_workflow(
         # Not a bug: every model in the chain is out of daily quota. Resumes after 00:00 UTC.
         status = "quota_paused"
         summary = f"Paused: daily Gemini quota exhausted for the whole model chain. {error}"
+    elif error and budget_stop:
+        # The caller's own cap (backfill --budget-calls), not a failure.
+        status = "budget_stopped"
+        summary = f"Stopped: call budget reached. {error}"
     elif error:
         status, summary = "error", error
     else:

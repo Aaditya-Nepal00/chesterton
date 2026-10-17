@@ -11,6 +11,8 @@ gemini-3.8-flash -> gemini-3.6-flash -> gemini-2.5-flash:
   backoff apply as before.
 - every model exhausted: AllModelsExhausted, which LLM_RETRY does not retry, so the
   node (and the run) fails with a clear reason.
+- optional CallBudget (backfill --budget-calls): a hard cap on requests sent, counted
+  before each request; over the cap raises CallBudgetExhausted (also not retried).
 
 The model actually used is written into LlmResponse.custom_metadata["chesterton_model"];
 skipped models into ["chesterton_skipped"]. TracePlugin turns those into LlmCall rows.
@@ -52,6 +54,43 @@ class AllModelsExhausted(Exception):
             f"all models in chain {chain} are out of daily Gemini quota "
             f"(earliest reset {until}); run stopped without retrying"
         )
+
+
+class CallBudgetExhausted(Exception):
+    """The process-wide cap on Gemini requests was reached. Not retried by LLM_RETRY."""
+
+
+class CallBudget:
+    """Counts every request sent to a model (retries and fallback hops included)."""
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self.used = 0
+        self.by_model: dict[str, int] = {}
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.limit - self.used)
+
+    def take(self, model: str) -> None:
+        if self.used >= self.limit:
+            raise CallBudgetExhausted(
+                f"call budget of {self.limit} Gemini requests reached; not sending to {model}"
+            )
+        self.used += 1
+        self.by_model[model] = self.by_model.get(model, 0) + 1
+
+
+_BUDGET: CallBudget | None = None
+
+
+def get_call_budget() -> CallBudget | None:
+    return _BUDGET
+
+
+def set_call_budget(budget: CallBudget | None) -> None:
+    global _BUDGET
+    _BUDGET = budget
 
 
 # --- quota cache ---------------------------------------------------------------
@@ -217,6 +256,8 @@ class FallbackGemini(BaseLlm):
                     {"model": name, "reason": "cached daily quota", "until": until.isoformat()}
                 )
                 continue
+            if _BUDGET is not None:
+                _BUDGET.take(name)
             request = llm_request.model_copy(update={"model": name})
             try:
                 async for response in self._llm(name).generate_content_async(request, stream):

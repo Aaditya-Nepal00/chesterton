@@ -30,6 +30,9 @@
   --fail: #b42318;         --fail-soft: #fde8e6;    --fail-line: #f0a39b;      /* failed */
   --guard: #3a43a4;        --guard-soft: #e9ebfb;   --guard-line: #b3b8ef;     /* guard */
   --gemini: #0b6466;       /* LLM marker uses the accent */
+  /* decision-status bar fills (found, partial, missing, self-evident), validated as adjacent
+     pairs for color-vision deficiency; text and pills keep the tones above */
+  --bar-found: #0f8a78; --bar-partial: #d8a73b; --bar-missing: #b8372f; --bar-self: #6f7f90;
 
   --shadow: 0 1px 2px rgb(18 24 28 / 0.06), 0 1px 1px rgb(18 24 28 / 0.04);
   --radius: 6px;
@@ -58,6 +61,7 @@
     --fail: #f38b80;    --fail-soft: #2d1513;    --fail-line: #6e2c25;
     --guard: #a2a9f5;   --guard-soft: #1a1d35;   --guard-line: #3f4486;
     --gemini: #5cc2bb;
+    --bar-found: #2a9d8f; --bar-partial: #ae8f2e; --bar-missing: #c23b3b; --bar-self: #74818d;
     --shadow: 0 1px 2px rgb(0 0 0 / 0.4);
   }
 }
@@ -84,6 +88,7 @@
   --fail: #f38b80;    --fail-soft: #2d1513;    --fail-line: #6e2c25;
   --guard: #a2a9f5;   --guard-soft: #1a1d35;   --guard-line: #3f4486;
   --gemini: #5cc2bb;
+  --bar-found: #2a9d8f; --bar-partial: #ae8f2e; --bar-missing: #c23b3b; --bar-self: #74818d;
   --shadow: 0 1px 2px rgb(0 0 0 / 0.4);
 }
 
@@ -198,6 +203,27 @@
 .bar-accent  { background: var(--accent); }
 .bar-code    { background: var(--line-strong); }
 .bar-running { background: var(--accent); opacity: 0.55; }
+.bar-found   { background: var(--bar-found); }
+.bar-partial { background: var(--bar-partial); }
+.bar-missing { background: var(--bar-missing); }
+.bar-self    { background: var(--bar-self); }
+
+/* "How we measured" popover (top layer, native popover API) */
+.method-popover {
+  margin: auto;
+  max-width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink-2);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.18);
+  padding: 20px;
+}
+.method-popover::backdrop {
+  background: rgb(0 0 0 / 0.25);
+}
 
 /* skeleton shimmer */
 @keyframes shimmer {

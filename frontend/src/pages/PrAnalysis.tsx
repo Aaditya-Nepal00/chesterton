@@ -168,6 +168,11 @@ export function PrAnalysis() {
                 </li>
               ))}
             </ol>
+          ) : a.questions_skipped ? (
+            <EmptyState title="Measured by a backfill; no questions asked.">
+              This past PR was analyzed only to count decisions without a written reason, so the questions step
+              didn't run and nothing was posted on GitHub.
+            </EmptyState>
           ) : a.questions.length ? (
             <EmptyState title="Questions were rendered but not posted.">
               This analysis ran without posting (CLI or dry run), so there's no open question set for it.

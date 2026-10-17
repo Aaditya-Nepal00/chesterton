@@ -48,7 +48,7 @@ query($owner: String!, $name: String!, $first: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequests(states: MERGED, first: $first, orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes {
-        number title url mergedAt changedFiles additions deletions
+        number title url mergedAt changedFiles additions deletions headRefOid
         author { login __typename }
         comments { totalCount }
         reviewThreads { totalCount }
@@ -275,6 +275,7 @@ async def list_merged_prs(
             "author": _login(n.get("author")),
             "author_is_bot": _is_bot(n.get("author")),
             "merged_at": n["mergedAt"],
+            "head_sha": n.get("headRefOid"),
             "changed_files": n["changedFiles"],
             "additions": n["additions"],
             "deletions": n["deletions"],

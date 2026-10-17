@@ -17,6 +17,7 @@ const pages = [
   ["pr-analysis", "/pr/Aaditya-Nepal00/chesterton-demo/1"],
   ["decisions", "/decisions"],
   ["install", "/install"],
+  ["backfill", `/backfill/${process.env.BACKFILL_REPO ?? "pallets/flask"}`],
 ];
 const onlyWidths = process.env.SHOT_WIDTHS?.split(","); // e.g. SHOT_WIDTHS=1440
 const viewports = [

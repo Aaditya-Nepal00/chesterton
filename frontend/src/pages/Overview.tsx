@@ -1,11 +1,13 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router";
+import { MethodPopover } from "../components/Backfill";
 import { DecisionRecordView } from "../components/DecisionRecordView";
 import { RunRow, RunRowSkeleton } from "../components/RunRow";
 import { Card, EmptyState, ErrorNote, Ext, InlineMd, SectionHeading, Skeleton, Stat } from "../components/ui";
 import {
   allQuestionSetsQuery,
   asAnalysis,
+  asBackfill,
   asDecision,
   asGuard,
   asQuestionSet,
@@ -16,10 +18,11 @@ import {
   latestOf,
   latestRunsQuery,
 } from "../lib/data";
+import { backfillPath, gapCounts, ratePercent } from "../lib/backfill";
 import { REPO_URL } from "../lib/firebase";
 import { percent, prUrl } from "../lib/format";
 import { useCount, useLiveQuery, useNow, useSums } from "../lib/hooks";
-import type { AnalysisDoc, DecisionRecordDoc, GuardDoc, QuestionSetDoc } from "../lib/types";
+import type { AnalysisDoc, BackfillDoc, DecisionRecordDoc, GuardDoc, QuestionSetDoc } from "../lib/types";
 
 function LoopStep({
   n,
@@ -106,11 +109,28 @@ function LoopStrip() {
   );
 }
 
+function WhyGapSub({ bf }: { bf: BackfillDoc }) {
+  const { gaps, checked } = gapCounts(bf.decisions);
+  return (
+    <span className="grid gap-0.5">
+      <span>
+        {checked ? `${gaps} of ${checked} decisions, ` : "no decisions yet, "}
+        <Link to={backfillPath(bf.repo)}>
+          last {bf.considered} PRs of <span className="mono">{bf.repo}</span>
+        </Link>
+      </span>
+      <span>
+        In this sample. <MethodPopover b={bf} />
+      </span>
+    </span>
+  );
+}
+
 function Kpis() {
   const analyzed = useCount(() => countAll("pr_analyses"), 0);
   const decisions = useCount(() => countAll("decisions"), 0);
   const guardWarnings = useCount(guardWarningsQuery, 0);
-  const backfills = useLiveQuery(backfillsQuery, (id, d) => ({ id, ...d }) as { id: string; why_gap_rate?: number }, []);
+  const backfills = useLiveQuery(backfillsQuery, asBackfill, []);
   // Server-side sum() over the per-PR counters (n_questions / n_answered).
   const qsums = useSums(allQuestionSetsQuery, { asked: "n_questions", answered: "n_answered" }, 0);
   const asked = qsums.data?.asked ?? 0;
@@ -133,8 +153,8 @@ function Kpis() {
         <Stat label="Guard warnings" value={guardWarnings.data ?? "—"} loading={guardWarnings.loading} />
         <Stat
           label="Why-gap rate"
-          value={bf?.why_gap_rate != null ? `${Math.round(bf.why_gap_rate * 100)}%` : "—"}
-          sub={bf ? "from the latest backfill" : "Run a backfill to measure"}
+          value={bf ? ratePercent(bf) : "—"}
+          sub={bf ? <WhyGapSub bf={bf} /> : "Run a backfill to measure"}
           loading={backfills.loading}
         />
       </div>

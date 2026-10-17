@@ -4,16 +4,23 @@ Graph (route names in quotes; a tuple fans out; JoinNode waits for both):
 
   START -> load_context -{"skip"}-> finish_skipped -> persist
                         -{default}-> (compute_signals, build_evidence) -> join_context
-  join_context -> screen_input -> screen -> gate -{"skip"}-> finish_skipped
-                                               -{default}-> extract_input
+  join_context -> screen_input -{"prescreened"}-> gate
+                               -{default}-> screen -> gate
+  gate -{"skip"}-> finish_skipped
+       -{"budget"}-> finish_budget            (backfill: consequential, no calls left)
+       -{default}-> extract_input
   extract_input -> extract -> plan_rationale -{"none"}-> verify
                                              -{default}-> rationale (parallel worker) -> verify
   verify -{"gaps"}-> questions_input -> questions -> verify_questions -> render_comment
-         -{default}-> render_comment
+         -{default}-> render_comment          (also when state.skip_questions: backfill)
   render_comment -> persist -> post_questions   (posts only when state.post is True)
 
 Shared data travels through session state (the PR context, signals, evidence
 index, decisions); node outputs carry what the next node needs plus a trace summary.
+
+Backfill flags in state (all optional): `skip_questions` (measure only, no questions
+call), `prescreened` (a screen result saved by an earlier run, so no screen call) and
+`max_rationale` (how many rationale calls the remaining call budget allows).
 """
 
 from __future__ import annotations
@@ -109,9 +116,18 @@ async def build_evidence(ctx: Context):
     return {"summary": f"{len(evidence)} evidence ids ({n_diff} diff hunks)"}
 
 
-async def screen_input(ctx: Context) -> str:
+async def screen_input(ctx: Context):
     trace_started(ctx)
+    if ctx.state.get("prescreened"):
+        screen = ScreenResult.model_validate(ctx.state["prescreened"]).model_dump(mode="json")
+        ctx.state["screen"] = screen
+        return Event(output=screen, route="prescreened")
     return screen_agent.build_input(_pr(ctx), Signals.model_validate(ctx.state["signals"]))
+
+
+def _rationale_cap(ctx: Context) -> int:
+    cap = ctx.state.get("max_rationale")
+    return MAX_RATIONALE_DECISIONS if cap is None else min(MAX_RATIONALE_DECISIONS, int(cap))
 
 
 async def gate(ctx: Context, node_input):
@@ -121,7 +137,20 @@ async def gate(ctx: Context, node_input):
         reason = "screen: not consequential — " + "; ".join(screen.reasons)
         ctx.state["skip_reason"] = reason
         return Event(output={"summary": reason}, route="skip")
+    if _rationale_cap(ctx) < 1:  # extract + one rationale check would exceed the budget
+        return Event(
+            output={"summary": "consequential; call budget too low to analyze"}, route="budget"
+        )
     return {"summary": "consequential — continue"}
+
+
+async def finish_budget(ctx: Context):
+    """Backfill only: the PR is consequential but the call budget can't cover its analysis.
+    Nothing is persisted to pr_analyses; the backfill keeps the screen result for --resume."""
+    trace_started(ctx)
+    ctx.state["run_status"] = "budget_stopped"
+    ctx.state["summary"] = "consequential; not analyzed (call budget reached)"
+    return {"summary": ctx.state["summary"]}
 
 
 async def extract_input(ctx: Context) -> str:
@@ -136,10 +165,13 @@ async def plan_rationale(ctx: Context, node_input):
     renumbered = [d.model_copy(update={"id": f"D{i}"}) for i, d in enumerate(raw, 1)]
     evidence = ctx.state["evidence"]
     kept, notes = ver.verify_decisions(renumbered, evidence)
-    if len(kept) > MAX_RATIONALE_DECISIONS:  # at most 3 questions are asked anyway
-        dropped = [d.id for d in kept[MAX_RATIONALE_DECISIONS:]]
-        notes.append(f"rationale checked for top {MAX_RATIONALE_DECISIONS} only; skipped {dropped}")
-        kept = kept[:MAX_RATIONALE_DECISIONS]
+    cap = _rationale_cap(ctx)  # at most 3 questions are asked anyway; less on a tight budget
+    if len(kept) > cap:
+        dropped = [d.id for d in kept[cap:]]
+        notes.append(f"rationale checked for top {cap} only; skipped {dropped}")
+        if cap < MAX_RATIONALE_DECISIONS:  # the budget, not the usual limit, dropped these
+            ctx.state["rationale_capped"] = dropped
+        kept = kept[:cap]
     ctx.state["decisions"] = [d.model_dump(mode="json") for d in kept]
     ctx.state["decision_notes"] = notes
     items = [rationale_agent.build_item(d, evidence) for d in kept]
@@ -172,7 +204,7 @@ async def verify(ctx: Context, node_input):
         "summary": f"{len(outcome.decisions)} decisions, gaps={outcome.gaps}, "
         f"{len(notes) + len(outcome.notes)} verifier notes"
     }
-    if outcome.gaps:
+    if outcome.gaps and not ctx.state.get("skip_questions"):
         return Event(output=summary, route="gaps")
     return summary
 
@@ -225,6 +257,7 @@ async def render_comment(ctx: Context, run_id: str):
         rationale=v["rationale"],
         verifier_notes=v["notes"] + list(ctx.state.get("question_notes") or []),
         questions=questions,
+        questions_skipped=bool(ctx.state.get("skip_questions")),
         comment_markdown=render_markdown(questions, pr=pr.number, run_id=run_id),
         models=_models(),
         evidence_urls=evidence_urls(ctx.state.get("evidence") or {}),
@@ -368,8 +401,13 @@ def build_workflow() -> Workflow:
                 load_context,
                 {"skip": finish_skipped, DEFAULT_ROUTE: (compute_signals, build_evidence)},
             ),
-            ((compute_signals, build_evidence), join, screen_input, screen, gate),
-            (gate, {"skip": finish_skipped, DEFAULT_ROUTE: extract_input}),
+            ((compute_signals, build_evidence), join, screen_input),
+            (screen_input, {"prescreened": gate, DEFAULT_ROUTE: screen}),
+            (screen, gate),
+            (
+                gate,
+                {"skip": finish_skipped, "budget": finish_budget, DEFAULT_ROUTE: extract_input},
+            ),
             (extract_input, extract, plan_rationale, {"none": verify, DEFAULT_ROUTE: rationale}),
             (rationale, verify),
             (verify, {"gaps": questions_input, DEFAULT_ROUTE: render_comment}),
@@ -392,6 +430,9 @@ async def run(
     refresh: bool = False,
     dry_run: bool = False,
     trigger: str = "cli",
+    skip_questions: bool = False,
+    prescreened: dict | None = None,
+    max_rationale: int | None = None,
     on_trace: Callable[[TraceEvent], None] | None = None,
 ) -> RunOutcome:
     return await run_workflow(
@@ -404,6 +445,9 @@ async def run(
             "persist_enabled": persist and not dry_run,
             "post": post and not dry_run,
             "dry_run": dry_run,
+            "skip_questions": skip_questions,
+            "prescreened": prescreened,
+            "max_rationale": max_rationale,
             "started_at": datetime.now(UTC).isoformat(),
         },
         trigger=trigger,

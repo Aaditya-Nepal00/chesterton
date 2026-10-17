@@ -6,6 +6,7 @@ Collections:
   decisions/{owner}__{repo}__{NNNN}     recorded decisions
   guards/{owner}__{repo}__{pr}          latest guard result per PR
   runs/{run_id} (+ events/{seq})        every workflow run and its trace
+  backfills/{owner}__{repo} (+ items/{pr})  why-gap measurement over past merged PRs
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ DECISIONS = "decisions"
 GUARDS = "guards"
 RUNS = "runs"
 EVENTS = "events"
+BACKFILLS = "backfills"
+ITEMS = "items"
 _BATCH_LIMIT = 450  # Firestore allows 500 writes per batch
 logger = logging.getLogger(__name__)
 
@@ -38,6 +41,11 @@ def pr_doc_id(repo: str, number: int) -> str:
 
 
 analysis_doc_id = pr_doc_id  # backwards-compatible name
+
+
+def repo_doc_id(repo: str) -> str:
+    owner, _, name = repo.partition("/")
+    return f"{owner}__{name}"
 
 
 def decision_doc_id(repo: str, number: int) -> str:
@@ -215,3 +223,32 @@ async def finish_run(run_id: str, meta: dict[str, Any], events: list[TraceEvent]
 async def get_run(run_id: str) -> dict | None:
     snap = await _client().collection(RUNS).document(run_id).get()
     return snap.to_dict() if snap.exists else None
+
+
+# --- backfills ---
+async def get_backfill(repo: str) -> dict | None:
+    snap = await _client().collection(BACKFILLS).document(repo_doc_id(repo)).get()
+    return snap.to_dict() if snap.exists else None
+
+
+async def list_backfill_items(repo: str) -> dict[int, dict]:
+    ref = _client().collection(BACKFILLS).document(repo_doc_id(repo)).collection(ITEMS)
+    return {int(d.id): d.to_dict() async for d in ref.stream()}
+
+
+async def save_backfill_item(repo: str, item: dict[str, Any]) -> str:
+    ref = (
+        _client()
+        .collection(BACKFILLS)
+        .document(repo_doc_id(repo))
+        .collection(ITEMS)
+        .document(str(item["pr"]))
+    )
+    await ref.set({**item, "updated_at": firestore.SERVER_TIMESTAMP})
+    return ref.path
+
+
+async def save_backfill(repo: str, summary: dict[str, Any]) -> str:
+    ref = _client().collection(BACKFILLS).document(repo_doc_id(repo))
+    await ref.set({**summary, "updated_at": firestore.SERVER_TIMESTAMP}, merge=True)
+    return ref.path

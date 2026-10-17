@@ -57,6 +57,10 @@ def test_ignores_versions_lowercase_locals_tests_and_docs():
         ("Fix pool timeout handling", True, True),
         ("Fix pool timeout handling", False, False),
         ("Release the connection on error", False, False),
+        ("v2.34.2", False, True),
+        ("1.0.0rc1", False, True),
+        ("3.11", False, False),
+        ("3.11+", False, False),  # a Python version support change, not a release
     ],
 )
 def test_release_or_bot(title, bot, expected):

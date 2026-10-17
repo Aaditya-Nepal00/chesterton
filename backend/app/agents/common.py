@@ -47,22 +47,29 @@ QUOTA_STOP_MARKERS = (
 )
 
 
-def is_daily_quota_stop(error: BaseException | str | None) -> bool:
-    """True when a run stopped because the model chain is out of daily quota (not a bug).
-
-    Walks the exception chain (ADK may wrap the plugin's error in a RuntimeError).
-    """
+def _chain_mentions(error: BaseException | str | None, markers: tuple[str, ...]) -> bool:
+    """Walks the exception chain (ADK may wrap the plugin's error in a RuntimeError)."""
     seen = 0
     exc = error
     while exc is not None and seen < 6:
         text = exc if isinstance(exc, str) else f"{type(exc).__name__}: {exc}"
-        if any(m in text for m in QUOTA_STOP_MARKERS):
+        if any(m in text for m in markers):
             return True
         if isinstance(exc, str):
             return False
         exc = exc.__cause__ or exc.__context__
         seen += 1
     return False
+
+
+def is_daily_quota_stop(error: BaseException | str | None) -> bool:
+    """True when a run stopped because the model chain is out of daily quota (not a bug)."""
+    return _chain_mentions(error, QUOTA_STOP_MARKERS)
+
+
+def is_budget_stop(error: BaseException | str | None) -> bool:
+    """True when a run stopped on its own call budget (CallBudgetExhausted)."""
+    return _chain_mentions(error, ("CallBudgetExhausted", "call budget of"))
 
 
 def is_long_quota(error: BaseException) -> bool:

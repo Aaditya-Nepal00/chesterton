@@ -25,6 +25,11 @@ const RUN: Record<string, StatusInfo> = {
   matched: { label: "Guard posted", tone: "guard", hint: "PR touches a recorded decision" },
   no_matches: { label: "No decisions touched", tone: "muted" },
   dry_run: { label: "Dry run", tone: "slate" },
+  budget_stopped: {
+    label: "Stopped — call budget",
+    tone: "slate",
+    hint: "A backfill reached its own cap on Gemini calls; it continues with --resume",
+  },
   done: { label: "Done", tone: "slate" },
 };
 
@@ -60,3 +65,27 @@ export const KIND_LABEL: Record<string, string> = {
   record: "Record",
   guard: "Guard",
 };
+
+const BACKFILL_ITEM: Record<string, StatusInfo> = {
+  skipped_deterministic: { label: "Skipped by rule", tone: "muted", hint: "Bot, release, docs-only or tests-only: no model call" },
+  not_consequential: { label: "Not consequential", tone: "muted", hint: "The screen found no decision worth a written reason" },
+  analyzed: { label: "Analyzed", tone: "slate" },
+  pending: { label: "Waiting for budget", tone: "accent", hint: "Screened consequential; analysis continues with --resume" },
+  error: { label: "Failed", tone: "fail" },
+};
+
+export function backfillItemStatus(status: string | undefined): StatusInfo {
+  return BACKFILL_ITEM[status ?? ""] ?? { label: (status ?? "unknown").replace(/_/g, " "), tone: "slate" };
+}
+
+const BACKFILL: Record<string, StatusInfo> = {
+  running: { label: "Running", tone: "accent" },
+  complete: { label: "Complete", tone: "ok" },
+  stopped_budget: { label: "Stopped — call budget", tone: "slate", hint: "Continues with --resume" },
+  paused_quota: { label: "Paused — daily AI quota", tone: "missing", hint: "Continues with --resume after 00:00 UTC" },
+  incomplete: { label: "Incomplete", tone: "fail", hint: "Some PRs failed; --resume retries them" },
+};
+
+export function backfillStatus(status: string | undefined): StatusInfo {
+  return BACKFILL[status ?? ""] ?? { label: status ?? "unknown", tone: "slate" };
+}

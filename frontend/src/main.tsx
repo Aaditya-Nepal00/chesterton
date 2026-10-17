@@ -8,6 +8,7 @@ import { RunTrace } from "./pages/RunTrace";
 import { PrAnalysis } from "./pages/PrAnalysis";
 import { Decisions } from "./pages/Decisions";
 import { Install } from "./pages/Install";
+import { Backfill } from "./pages/Backfill";
 import { NotFound } from "./pages/NotFound";
 
 const router = createBrowserRouter([
@@ -19,6 +20,7 @@ const router = createBrowserRouter([
       { path: "/pr/:owner/:repo/:number", element: <PrAnalysis /> },
       { path: "/decisions", element: <Decisions /> },
       { path: "/decisions/:docId", element: <Decisions /> },
+      { path: "/backfill/:owner/:repo", element: <Backfill /> },
       { path: "/install", element: <Install /> },
       { path: "*", element: <NotFound /> },
     ],

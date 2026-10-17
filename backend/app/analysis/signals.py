@@ -73,7 +73,8 @@ CONSTANT_KEYWORDS = (
 )
 
 _RELEASE_TITLE = re.compile(
-    r"(^|\W)(release|version)\s+v?\d+\.\d+|^\W*bump\s+\S+\s+from\b|^\W*chore\(release\)",
+    r"(^|\W)(release|version)\s+v?\d+\.\d+|^\W*bump\s+\S+\s+from\b|^\W*chore\(release\)"
+    r"|^\W*v?\d+\.\d+\.\d+([.-]?\w+)?\s*$",  # the whole title is a version: "v2.34.2"
     re.IGNORECASE,
 )
 _REVERT_TITLE = re.compile(r"^\W*revert\b", re.IGNORECASE)
@@ -215,6 +216,7 @@ def compute_signals_for(title: str, author_is_bot: bool, files: list[ChangedFile
     constants = find_constant_changes(files)
     is_revert = bool(_REVERT_TITLE.search(title or ""))
     docs_only = bool(paths) and all(is_doc(p) for p in paths)
+    tests_only = not docs_only and bool(paths) and all(is_test(p) or is_doc(p) for p in paths)
     rel_bot = release_or_bot(title, author_is_bot)
 
     score = 0
@@ -230,7 +232,7 @@ def compute_signals_for(title: str, author_is_bot: bool, files: list[ChangedFile
         score += 2
     if sum(f.additions + f.deletions for f in files if not is_doc(f.path)) > 300:
         score += 1
-    if docs_only or rel_bot:
+    if docs_only or tests_only or rel_bot:
         score = 0
 
     return Signals(
@@ -241,6 +243,7 @@ def compute_signals_for(title: str, author_is_bot: bool, files: list[ChangedFile
         constant_changes=constants,
         is_revert=is_revert,
         is_docs_only=docs_only,
+        is_tests_only=tests_only,
         is_release_or_bot=rel_bot,
     )
 
@@ -254,4 +257,6 @@ def skip_reason(signals: Signals) -> str | None:
         return "release or bot PR"
     if signals.is_docs_only:
         return "docs-only PR"
+    if signals.is_tests_only:
+        return "tests-only PR"
     return None

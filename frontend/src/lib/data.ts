@@ -12,6 +12,8 @@ import { db } from "./firebase";
 import { toDate } from "./format";
 import type {
   AnalysisDoc,
+  BackfillDoc,
+  BackfillItemDoc,
   DecisionRecordDoc,
   GuardDoc,
   QuestionSetDoc,
@@ -33,6 +35,11 @@ export const asDecision = (id: string, d: Raw) =>
   ({ paths: [], symbols: [], ...d, docId: id }) as unknown as DecisionRecordDoc;
 export const asGuard = (id: string, d: Raw) =>
   ({ matches: [], judgements: [], items: [], ...d, id }) as unknown as GuardDoc;
+const NO_COUNTS = { found: 0, partial: 0, missing: 0, self_evident: 0 };
+export const asBackfill = (id: string, d: Raw) =>
+  ({ models_used: [], why_gap_rate: null, method: "", ...d, decisions: { ...NO_COUNTS, ...(d.decisions as object) }, id }) as unknown as BackfillDoc;
+export const asBackfillItem = (id: string, d: Raw) =>
+  ({ decisions: [], ...d, id }) as unknown as BackfillItemDoc;
 
 const col = (name: string) => (db ? collection(db, name) : null);
 
@@ -75,10 +82,16 @@ export const guardWarningsQuery = (): Query | null => {
   const c = col("guards");
   return c ? query(c, where("matched_count", ">", 0)) : null;
 };
+/** The most recently updated backfill (the Overview KPI shows its rate). */
 export const backfillsQuery = (): Query | null => {
   const c = col("backfills");
-  return c ? query(c, limit(1)) : null;
+  return c ? query(c, orderBy("updated_at", "desc"), limit(1)) : null;
 };
+/** backfills/{owner}__{repo}: one doc per repo (no PR number, unlike prDocId). */
+export const repoDocId = (repo: string) => repo.replace("/", "__");
+export const backfillRef = (id: string) => (db ? doc(db, "backfills", id) : null);
+export const backfillItemsQuery = (id: string): Query | null =>
+  db ? query(collection(db, "backfills", id, "items"), orderBy("pr", "desc")) : null;
 
 // --- derived run facts ---
 export function runPr(run: RunDoc): number | undefined {

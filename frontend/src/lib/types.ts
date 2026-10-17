@@ -104,6 +104,7 @@ export interface AnalysisDoc {
   rationale: RationaleCheck[];
   verifier_notes: string[];
   questions: RenderedQuestion[];
+  questions_skipped?: boolean; // backfill measurement: the questions step did not run
   comment_markdown?: string | null;
   models?: Record<string, string | null>;
   evidence_urls?: Record<string, string>; // evidence id -> html_url (Build 7a+)
@@ -204,4 +205,66 @@ export interface GuardDoc {
   comment_url?: string | null;
   matched_count?: number;
   updated_at?: TimeLike;
+}
+
+export type DecisionCounts = Record<RationaleStatus, number>;
+
+/** backfills/{owner}__{repo}  (why-gap measurement over a repo's last N merged PRs) */
+export interface BackfillDoc {
+  id: string;
+  repo: string;
+  status: "running" | "complete" | "stopped_budget" | "paused_quota" | "incomplete";
+  epoch?: string;
+  sample_size: number;
+  sample_prs?: number[];
+  sample_listed_at?: string | null;
+  considered: number; // newest-first PRs with a verdict; the headline counts only these
+  skipped_deterministic: number;
+  skipped_by_kind?: Record<string, number>;
+  screened: number;
+  consequential: number;
+  analyzed: number;
+  pending?: number;
+  errors?: number;
+  prs_with_gaps?: number;
+  decisions: DecisionCounts;
+  decisions_total?: number;
+  why_gap_rate: number | null;
+  calls_used: number;
+  models_used: string[];
+  method: string;
+  budget_calls?: number;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_at?: TimeLike;
+}
+
+export interface BackfillDecision {
+  id: string;
+  summary: string;
+  category: string;
+  status: RationaleStatus | "unchecked";
+  reason_quote?: string | null;
+}
+
+/** backfills/{id}/items/{pr} */
+export interface BackfillItemDoc {
+  id: string;
+  pr: number;
+  title?: string;
+  url?: string;
+  author?: string | null;
+  merged_at?: string | null;
+  head_sha?: string | null;
+  epoch?: string;
+  status: "skipped_deterministic" | "not_consequential" | "analyzed" | "pending" | "error";
+  skip_kind?: string | null;
+  skip_reason?: string | null;
+  screen?: { consequential: boolean; reasons: string[] } | null;
+  decisions: BackfillDecision[];
+  counts?: DecisionCounts;
+  calls?: number;
+  run_id?: string | null;
+  analysis_id?: string | null;
+  error?: string | null;
 }

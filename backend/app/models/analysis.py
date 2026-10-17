@@ -28,6 +28,7 @@ class Signals(BaseModel):
     constant_changes: list[ConstantChange] = Field(default_factory=list)
     is_revert: bool = False
     is_docs_only: bool = False
+    is_tests_only: bool = False  # only tests (and maybe docs) changed
     is_release_or_bot: bool = False
 
 
@@ -135,6 +136,7 @@ class AnalysisResult(BaseModel):
     rationale: list[RationaleCheck] = Field(default_factory=list)
     verifier_notes: list[str] = Field(default_factory=list)
     questions: list[RenderedQuestion] = Field(default_factory=list)
+    questions_skipped: bool = False  # backfill measurement: the questions step did not run
     comment_markdown: str | None = None
     models: dict[str, str | None] = Field(default_factory=dict)
     # evidence id -> html_url (diff hunk line, review/issue comment, commit, linked issue)

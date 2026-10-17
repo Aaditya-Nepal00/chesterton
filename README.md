@@ -39,7 +39,7 @@ GitHub event ──▶ GitHub Action (python -m app.action)
 - **Agents:** [Google ADK 2](https://google.github.io/adk-docs/) graph `Workflow`s. LLM steps are ADK `Agent` nodes with Pydantic output schemas; everything that can be done in code is a plain function node. Rationale checks and guard judgments run as parallel workers (at most 2 concurrent model calls).
 - **Models:** Gemini through the Gemini API, as ordered chains (`gemini-3.8-flash → 3.6-flash → 2.5-flash` and `gemini-3.5-flash-lite → 3.1-flash-lite → 2.5-flash-lite`). When a model hits its daily free-tier quota it is skipped until 00:00 UTC and the same request moves to the next model; per-minute limits are waited out; 503s are retried with backoff. If the whole chain is out of quota, the run is marked *paused*, not failed.
 - **Verifier:** plain Python checks every model claim against an evidence index built from the PR. A decision must cite diff hunks that exist; a "reason found" must quote text that is actually in the cited evidence; a question may only compare to a previous value visible in the diff. Anything that fails is dropped or downgraded, and the change is recorded as a verifier note.
-- **Storage:** Firestore holds analyses, question sets, decision records, guard results and a step-by-step trace of every run (`runs/{id}/events`, written as each step happens).
+- **Storage:** Firestore holds analyses, question sets, decision records, guard results, backfill measurements (`backfills/{owner}__{repo}` with one item per PR) and a step-by-step trace of every run (`runs/{id}/events`, written as each step happens).
 - **Dashboard:** React on Firebase Hosting, reading Firestore directly with security rules that allow reads of these collections only and deny all client writes.
 
 ### Workflows and nodes
@@ -75,6 +75,12 @@ uv sync
 # Analyze any public PR (read-only, never posts)
 uv run python scripts/analyze_pr.py encode/httpx 3592 --no-persist
 uv run python scripts/list_prs.py pallets/flask --limit 30
+
+# Measure the why-gap on a public repo's last N merged PRs (read-only, never posts).
+# --dry-run makes 0 Gemini calls and prints the estimated calls; the real run never
+# spends more than --budget-calls and continues with --resume after a stop.
+uv run python scripts/backfill.py pallets/flask --limit 22 --budget-calls 40 --dry-run
+uv run python scripts/backfill.py pallets/flask --limit 22 --budget-calls 40
 
 # Run the Action's code path locally (writes only to GITHUB_DEMO_REPO, as the App)
 uv run python scripts/run_event.py --kind analyze --repo owner/demo --pr 1 --dry-run
