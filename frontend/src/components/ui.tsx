@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { shortModel } from "../lib/format";
 import type { StatusInfo, Tone } from "../lib/status";
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
@@ -42,9 +43,16 @@ export function Pill({ info, size = "sm", title }: { info: StatusInfo; size?: "s
 }
 
 export function KindChip({ kind }: { kind: string }) {
-  const label = { analyze: "Analyze", record: "Record", guard: "Guard" }[kind] ?? kind;
+  const label = { analyze: "Analyze", record: "Record", guard: "Guard", backfill: "Backfill" }[kind] ?? kind;
   return (
-    <span className="mono inline-block w-[68px] rounded border border-line bg-surface-2 px-1.5 py-px text-center text-xs uppercase tracking-wide text-ink-2">
+    <span
+      className={cx(
+        "mono inline-block w-[68px] rounded border px-1 py-px text-center text-xs uppercase",
+        kind === "backfill"
+          ? "border-dashed border-line-strong tracking-normal text-ink-3"
+          : "border-line bg-surface-2 tracking-wide text-ink-2",
+      )}
+    >
       {label}
     </span>
   );
@@ -64,13 +72,13 @@ export function EngineMarker({ model, gemini }: { model?: string | null; gemini:
   }
   return (
     <span
-      className="mono inline-flex items-center gap-1 rounded border border-accent/40 bg-accent-soft px-1.5 py-px text-xs text-accent"
-      title="Gemini call"
+      className="inline-flex items-center gap-1 whitespace-nowrap rounded border border-accent/40 bg-accent-soft px-1.5 py-px text-xs text-accent"
+      title={model ? `Gemini call: ${model}` : "Gemini call"}
     >
       <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
         <path d="M8 1.5c.6 3.2 3.3 5.9 6.5 6.5-3.2.6-5.9 3.3-6.5 6.5C7.4 11.3 4.7 8.6 1.5 8 4.7 7.4 7.4 4.7 8 1.5z" fill="currentColor" />
       </svg>
-      {model ?? "Gemini"}
+      {model ? shortModel(model) : "Gemini"}
     </span>
   );
 }

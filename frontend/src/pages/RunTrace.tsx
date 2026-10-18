@@ -1,12 +1,13 @@
 import type { ReactNode } from "react";
 import { Link, useParams } from "react-router";
 import { Timeline } from "../components/Timeline";
-import { Card, EmptyState, ErrorNote, Ext, KindChip, PageTitle, Pill, SectionHeading, Skeleton } from "../components/ui";
+import { ModelChips } from "../components/ModelChips";
+import { Card, EmptyState, ErrorNote, Ext, InlineMd, KindChip, PageTitle, Pill, SectionHeading, Skeleton } from "../components/ui";
 import { analysisRef, asAnalysis, asEvent, asRun, eventsQuery, modelsAnswered, runDurationMs, runPr, runRef } from "../lib/data";
 import { formatDateTime, formatDuration, prDocId, prUrl, toDate } from "../lib/format";
 import { useLiveDoc, useLiveQuery } from "../lib/hooks";
 import { inferKind } from "../lib/nodes";
-import { runStatus } from "../lib/status";
+import { runStatusOf } from "../lib/status";
 
 function Meta({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -31,6 +32,8 @@ export function RunTrace() {
   );
   const notesForThisRun = analysis.data && analysis.data.run_id === id ? analysis.data.verifier_notes : null;
   const models = r ? modelsAnswered(r) : [];
+  // The PR title comes from the analysis doc (runs don't store it), for analyze runs only.
+  const prTitle = analysis.data?.title ?? null;
   const live = r?.status === "running";
 
   if (run.loading) {
@@ -65,7 +68,7 @@ export function RunTrace() {
               <KindChip kind={kind} /> <span className="mono">{r.run_id}</span>
             </span>
           }
-          aside={<Pill info={runStatus(r.status)} />}
+          aside={<Pill info={runStatusOf(r)} />}
         >
           {pr != null ? (
             <>
@@ -77,7 +80,16 @@ export function RunTrace() {
             r.repo
           )}
         </PageTitle>
-        {r.summary && <p className="-mt-4 mb-6 max-w-[860px] text-ink-2">{r.summary}</p>}
+        {(prTitle || r.summary) && (
+          <div className="-mt-4 mb-6 grid max-w-[860px] gap-1">
+            {prTitle && (
+              <p className="font-display text-xl leading-8 text-ink">
+                <InlineMd text={prTitle} />
+              </p>
+            )}
+            {r.summary && <p className="text-ink-2">{r.summary}</p>}
+          </div>
+        )}
         <Card className="p-4 sm:p-5">
           <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-6">
             <Meta label="Started">{formatDateTime(toDate(r.started_at))}</Meta>
@@ -89,7 +101,7 @@ export function RunTrace() {
               {!!r.llm_failed_calls && <span className="text-ink-3"> ({r.llm_failed_calls} failed, retried)</span>}
             </Meta>
             <Meta label="Models used">
-              <span className="mono break-words">{models.length ? models.join(", ") : "none"}</span>
+              {models.length ? <ModelChips models={models} wrap /> : <span className="text-ink-3">none</span>}
             </Meta>
             <Meta label="Pull request">
               {pr != null ? <Ext href={prUrl(r.repo, pr)}>on GitHub</Ext> : "—"}

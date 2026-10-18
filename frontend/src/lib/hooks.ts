@@ -25,11 +25,14 @@ export function useLiveQuery<T>(
   map: (id: string, data: Record<string, unknown>) => T,
   deps: unknown[],
 ): Live<T[]> {
-  const [state, setState] = useState<Live<T[]>>({ data: [], loading: true, error: null });
+  // State remembers which deps it was loaded for, so a deps change reads as loading at once
+  // (no one-frame flash of the previous or empty result before the effect re-subscribes).
+  const key = deps.map(String).join("\u0000");
+  const [state, setState] = useState<Live<T[]> & { key: string | null }>({ data: [], loading: true, error: null, key: null });
   useEffect(() => {
     const q = make();
     if (!q) {
-      setState({ data: [], loading: false, error: null });
+      setState({ data: [], loading: false, error: null, key });
       return;
     }
     setState((s) => ({ ...s, loading: true }));
@@ -40,12 +43,13 @@ export function useLiveQuery<T>(
           data: snap.docs.map((d) => map(d.id, d.data())),
           loading: false,
           error: null,
+          key,
         }),
-      (err) => setState({ data: [], loading: false, error: describe(err) }),
+      (err) => setState({ data: [], loading: false, error: describe(err), key }),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
-  return state;
+  return state.key === key ? state : { ...state, loading: true };
 }
 
 /** Realtime single document. */

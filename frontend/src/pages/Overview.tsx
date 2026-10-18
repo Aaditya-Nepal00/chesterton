@@ -1,11 +1,11 @@
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Link } from "react-router";
 import { MethodPopover } from "../components/Backfill";
 import { DecisionRecordView } from "../components/DecisionRecordView";
-import { RunRow, RunRowSkeleton } from "../components/RunRow";
-import { Card, EmptyState, ErrorNote, Ext, InlineMd, SectionHeading, Skeleton, Stat } from "../components/ui";
+import { BackfillRow, RunRow, RunRowSkeleton } from "../components/RunRow";
+import { Card, cx, EmptyState, ErrorNote, Ext, InlineMd, SectionHeading, Skeleton, Stat } from "../components/ui";
 import {
-  allQuestionSetsQuery,
+  allBackfillsQuery,
   asAnalysis,
   asBackfill,
   asDecision,
@@ -13,16 +13,17 @@ import {
   asQuestionSet,
   asRun,
   backfillsQuery,
-  countAll,
-  guardWarningsQuery,
-  latestOf,
+  inReposQuery,
+  isBackfillRun,
+  isLiveRun,
   latestRunsQuery,
+  newestFirst,
 } from "../lib/data";
 import { backfillPath, gapCounts, ratePercent } from "../lib/backfill";
 import { REPO_URL } from "../lib/firebase";
-import { percent, prUrl } from "../lib/format";
-import { useCount, useLiveQuery, useNow, useSums } from "../lib/hooks";
-import type { AnalysisDoc, BackfillDoc, DecisionRecordDoc, GuardDoc, QuestionSetDoc } from "../lib/types";
+import { percent, prUrl, shortRepo, toDate } from "../lib/format";
+import { useLiveQuery, useNow } from "../lib/hooks";
+import type { AnalysisDoc, BackfillDoc, DecisionRecordDoc, GuardDoc, QuestionSetDoc, RunDoc } from "../lib/types";
 
 function LoopStep({
   n,
@@ -49,56 +50,128 @@ function LoopStep({
   );
 }
 
-function LoopStrip() {
-  const analyses = useLiveQuery(() => latestOf("pr_analyses"), asAnalysis, []);
-  const qsets = useLiveQuery(() => latestOf("questions"), asQuestionSet, []);
-  const decisions = useLiveQuery(() => latestOf("decisions", "created_at"), asDecision, []);
-  const guards = useLiveQuery(() => latestOf("guards"), asGuard, []);
-  const a: AnalysisDoc | undefined = analyses.data[0];
-  const q: QuestionSetDoc | undefined = qsets.data[0];
-  const d: DecisionRecordDoc | undefined = decisions.data[0];
-  const g: GuardDoc | undefined = guards.data[0];
+/** What Overview reads: live Action runs and the repos they touched, kept apart from backfill
+    runs (a read-only measurement) and Build-3 CLI runs. Everything below is scoped from here. */
+function useLiveScope() {
+  const runs = useLiveQuery(() => latestRunsQuery(100), asRun, []);
+  const repos = useMemo(() => [...new Set(runs.data.filter(isLiveRun).map((r) => r.repo))].sort(), [runs.data]);
+  const key = repos.join(",");
+  const analyses = useLiveQuery(() => inReposQuery("pr_analyses", repos), asAnalysis, [key]);
+  const qsets = useLiveQuery(() => inReposQuery("questions", repos), asQuestionSet, [key]);
+  const decisions = useLiveQuery(() => inReposQuery("decisions", repos), asDecision, [key]);
+  const guards = useLiveQuery(() => inReposQuery("guards", repos), asGuard, [key]);
+  return useMemo(() => {
+    // An analysis written by a backfill or CLI run is not live, even on a live repo.
+    const notLive = new Set(runs.data.filter((r) => !isLiveRun(r)).map((r) => r.run_id));
+    return {
+      runsLoading: runs.loading,
+      runsError: runs.error,
+      repos,
+      liveRuns: runs.data.filter(isLiveRun),
+      backfillRuns: runs.data.filter(isBackfillRun),
+      analyses: {
+        loading: runs.loading || analyses.loading,
+        data: newestFirst(analyses.data.filter((x) => !notLive.has(x.run_id)), (x) => x.updated_at),
+      },
+      qsets: { loading: runs.loading || qsets.loading, data: newestFirst(qsets.data, (x) => x.updated_at) },
+      // One reply records several at the same instant: highest number first among equals.
+      decisions: {
+        loading: runs.loading || decisions.loading,
+        data: newestFirst([...decisions.data].sort((x, y) => y.id.localeCompare(x.id)), (x) => x.created_at),
+      },
+      guards: { loading: runs.loading || guards.loading, data: newestFirst(guards.data, (x) => x.updated_at) },
+    };
+  }, [runs, repos, analyses, qsets, decisions, guards]);
+}
+type Scope = ReturnType<typeof useLiveScope>;
+
+/** The newest batch of records (one reply can record several), lowest number first. */
+function latestBatch(decisions: DecisionRecordDoc[]): DecisionRecordDoc[] {
+  const d = decisions[0];
+  if (!d) return [];
+  return decisions
+    .filter((x) => x.repo === d.repo && x.source_pr === d.source_pr)
+    .sort((x, y) => x.id.localeCompare(y.id));
+}
+
+function LoopStrip({ scope }: { scope: Scope }) {
+  const a: AnalysisDoc | undefined = scope.analyses.data[0];
+  const q: QuestionSetDoc | undefined = scope.qsets.data[0];
+  const batch = latestBatch(scope.decisions.data);
+  // The guard step shows a guard that actually surfaced a decision when there is one.
+  const g: GuardDoc | undefined = scope.guards.data.find((x) => (x.matched_count ?? 0) > 0) ?? scope.guards.data[0];
   const firstQ = q?.questions.find((x) => x.status === "open") ?? q?.questions[0];
   const gj = g?.judgements[0];
+  const range = batch.length > 1 ? `${batch[0].id}–${batch[batch.length - 1].id}` : batch[0]?.id;
   return (
     <section aria-labelledby="loop">
-      <h2 id="loop" className="sr-only">How the loop works, with the latest real example of each step</h2>
+      <h2 id="loop" className="sr-only">How the loop works, with the latest live example of each step</h2>
       <ol className="flex flex-col gap-6 sm:flex-row sm:gap-5">
-        <LoopStep n={1} title="Merge" verb="A PR is merged; Chesterton reads it." loading={analyses.loading}>
+        <LoopStep n={1} title="Merge" verb="A PR is merged; Chesterton reads it." loading={scope.analyses.loading}>
           {a ? (
             <span>
-              <Link to={`/pr/${a.repo}/${a.number}`} className="mono">{a.repo}#{a.number}</Link>{" "}
-              <span className="text-ink">{a.title}</span>
+              <Link to={`/pr/${a.repo}/${a.number}`} className="mono" title={`${a.repo}#${a.number}`}>
+                {shortRepo(a.repo)}#{a.number}
+              </Link>{" "}
+              <span className="text-ink">
+                <InlineMd text={a.title} />
+              </span>
             </span>
           ) : (
             <span className="text-ink-3">No PR analyzed yet.</span>
           )}
         </LoopStep>
-        <LoopStep n={2} title="Ask why" verb="Decisions with no written reason get a question." loading={qsets.loading}>
+        <LoopStep n={2} title="Ask why" verb="Decisions with no written reason get a question." loading={scope.qsets.loading}>
           {firstQ && q ? (
             <span>
               “<InlineMd text={firstQ.text} />”{" "}
-              <Ext href={q.comment_url} className="whitespace-nowrap text-xs">on #{q.pr}</Ext>
+              <Ext href={q.comment_url} className="whitespace-nowrap text-xs">
+                {q.questions.length > 1 ? `${q.questions.length} questions ` : ""}on #{q.pr}
+              </Ext>
             </span>
           ) : (
             <span className="text-ink-3">No questions asked yet.</span>
           )}
         </LoopStep>
-        <LoopStep n={3} title="Record" verb="The author's answer becomes decisions/NNNN.md." loading={decisions.loading}>
-          {d ? (
-            <span>
-              <Link to={`/decisions/${d.docId}`} className="mono">{d.id}</Link>{" "}
-              <span className="text-ink">{d.title}</span>
+        <LoopStep n={3} title="Record" verb="The author's answer becomes decisions/NNNN.md." loading={scope.decisions.loading}>
+          {batch.length ? (
+            <span className="grid gap-1">
+              <span className="text-ink-3">
+                <span className="mono text-ink">{range}</span> from the answer on #{batch[0].source_pr}
+              </span>
+              <ul className="grid gap-0.5">
+                {batch.slice(-3).map((d) => (
+                  <li key={d.docId} className="flex gap-1.5">
+                    <Link to={`/decisions/${d.docId}`} className="mono shrink-0">
+                      {d.id}
+                    </Link>
+                    <span className="text-ink">{d.title}</span>
+                  </li>
+                ))}
+              </ul>
             </span>
           ) : (
             <span className="text-ink-3">No decision recorded yet.</span>
           )}
         </LoopStep>
-        <LoopStep n={4} title="Guard" verb="A later PR touching it gets the reason and owner." loading={guards.loading}>
+        <LoopStep n={4} title="Guard" verb="A later PR touching it gets the reason and owner." loading={scope.guards.loading}>
           {g ? (
             <span>
-              <Ext href={g.comment_url ?? prUrl(g.repo, g.pr)} className="mono">{g.repo}#{g.pr}</Ext>{" "}
-              {gj ? <span className="text-ink">{gj.note || "touches a recorded decision"}</span> : "no recorded decision touched"}
+              <Ext href={g.comment_url ?? prUrl(g.repo, g.pr)} className="mono">
+                <span title={`${g.repo}#${g.pr}`}>
+                  {shortRepo(g.repo)}#{g.pr}
+                </span>
+              </Ext>{" "}
+              {gj ? (
+                <span className="text-ink">
+                  {gj.decision_number ? (
+                    <span className="mono text-ink-3">{String(gj.decision_number).padStart(4, "0")} · </span>
+                  ) : null}
+                  {gj.note || "touches a recorded decision"}
+                </span>
+              ) : (
+                "no recorded decision touched"
+              )}
             </span>
           ) : (
             <span className="text-ink-3">No guard comments yet.</span>
@@ -113,58 +186,112 @@ function WhyGapSub({ bf }: { bf: BackfillDoc }) {
   const { gaps, checked } = gapCounts(bf.decisions);
   return (
     <span className="grid gap-0.5">
+      <span>{checked ? `${gaps} of ${checked} decisions, last ${bf.considered} PRs` : "no decisions yet"}</span>
       <span>
-        {checked ? `${gaps} of ${checked} decisions, ` : "no decisions yet, "}
-        <Link to={backfillPath(bf.repo)}>
-          last {bf.considered} PRs of <span className="mono">{bf.repo}</span>
-        </Link>
-      </span>
-      <span>
-        In this sample. <MethodPopover b={bf} />
+        <MethodPopover b={bf} />
       </span>
     </span>
   );
 }
 
-function Kpis() {
-  const analyzed = useCount(() => countAll("pr_analyses"), 0);
-  const decisions = useCount(() => countAll("decisions"), 0);
-  const guardWarnings = useCount(guardWarningsQuery, 0);
+/** A labelled run of KPI tiles: the label says where the numbers come from. */
+function KpiGroup({ label, children, className }: { label: ReactNode; children: ReactNode; className?: string }) {
+  return (
+    <div className={cx("min-w-0", className)}>
+      <div className="mb-3 border-b border-line pb-1.5 text-xs uppercase tracking-[0.08em] text-ink-3">{label}</div>
+      {children}
+    </div>
+  );
+}
+
+function Kpis({ scope }: { scope: Scope }) {
   const backfills = useLiveQuery(backfillsQuery, asBackfill, []);
-  // Server-side sum() over the per-PR counters (n_questions / n_answered).
-  const qsums = useSums(allQuestionSetsQuery, { asked: "n_questions", answered: "n_answered" }, 0);
-  const asked = qsums.data?.asked ?? 0;
-  const answered = qsums.data?.answered ?? 0;
-  const qsets = { loading: qsums.loading };
+  const asked = scope.qsets.data.reduce((n, q) => n + (q.n_questions ?? q.questions.length), 0);
+  const answered = scope.qsets.data.reduce(
+    (n, q) => n + (q.n_answered ?? q.questions.filter((x) => x.status === "answered").length),
+    0,
+  );
+  const warnings = scope.guards.data.filter((g) => (g.matched_count ?? 0) > 0).length;
   const bf = backfills.data[0];
+  const repos = scope.repos;
+  const liveLabel = scope.runsLoading ? (
+    "Live installs"
+  ) : repos.length === 1 ? (
+    <>
+      Live install ·{" "}
+      <span className="mono normal-case tracking-normal" title={repos[0]}>
+        {shortRepo(repos[0])}
+      </span>
+    </>
+  ) : (
+    <span title={repos.join(", ")}>Live installs · {repos.length} repos</span>
+  );
   return (
     <section aria-labelledby="kpis">
       <h2 id="kpis" className="sr-only">Totals</h2>
-      <div className="grid grid-cols-2 gap-y-6 sm:grid-cols-3 lg:grid-cols-6">
-        <Stat label="PRs analyzed" value={analyzed.data ?? "—"} loading={analyzed.loading} />
-        <Stat label="Questions asked" value={asked} loading={qsets.loading} />
-        <Stat
-          label="Answer rate"
-          value={percent(answered, asked)}
-          sub={asked ? `${answered} of ${asked} answered` : "no questions yet"}
-          loading={qsets.loading}
-        />
-        <Stat label="Decisions recorded" value={decisions.data ?? "—"} loading={decisions.loading} />
-        <Stat label="Guard warnings" value={guardWarnings.data ?? "—"} loading={guardWarnings.loading} />
-        <Stat
-          label="Why-gap rate"
-          value={bf ? ratePercent(bf) : "—"}
-          sub={bf ? <WhyGapSub bf={bf} /> : "Run a backfill to measure"}
-          loading={backfills.loading}
-        />
+      <div className="grid gap-x-8 gap-y-8 lg:grid-cols-[5fr_1fr]">
+        <KpiGroup label={liveLabel}>
+          <div className="grid grid-cols-2 gap-y-6 sm:grid-cols-3 lg:grid-cols-5">
+            <Stat label="PRs analyzed" value={scope.analyses.data.length} loading={scope.analyses.loading} />
+            <Stat label="Questions asked" value={asked} loading={scope.qsets.loading} />
+            <Stat
+              label="Answer rate"
+              value={percent(answered, asked)}
+              sub={asked ? `${answered} of ${asked} answered` : "no questions yet"}
+              loading={scope.qsets.loading}
+            />
+            <Stat label="Decisions recorded" value={scope.decisions.data.length} loading={scope.decisions.loading} />
+            <Stat label="Guard warnings" value={warnings} sub="PRs shown a decision" loading={scope.guards.loading} />
+          </div>
+        </KpiGroup>
+        <KpiGroup
+          label={
+            bf ? (
+              <Link to={backfillPath(bf.repo)} className="text-ink-3 no-underline hover:text-accent">
+                Backfill ·{" "}
+                <span className="mono normal-case tracking-normal" title={bf.repo}>
+                  {shortRepo(bf.repo)}
+                </span>
+              </Link>
+            ) : (
+              "Backfill"
+            )
+          }
+        >
+          <Stat
+            label="Why-gap rate"
+            value={bf ? ratePercent(bf) : "—"}
+            sub={bf ? <WhyGapSub bf={bf} /> : "Run a backfill to measure"}
+            loading={backfills.loading}
+          />
+        </KpiGroup>
       </div>
     </section>
   );
 }
 
-function Activity() {
-  const runs = useLiveQuery(() => latestRunsQuery(15), asRun, []);
+type Entry = { at: number; node: ReactNode };
+
+function Activity({ scope }: { scope: Scope }) {
+  const backfills = useLiveQuery(allBackfillsQuery, asBackfill, []);
   const now = useNow();
+  const entries = useMemo(() => {
+    const out: Entry[] = scope.liveRuns.slice(0, 15).map((r) => ({
+      at: toDate(r.started_at)?.getTime() ?? 0,
+      node: <RunRow key={r.id} run={r} now={now} />,
+    }));
+    // One row per backfilled repo, placed at its newest run.
+    const byRepo = new Map<string, RunDoc[]>();
+    for (const r of scope.backfillRuns) byRepo.set(r.repo, [...(byRepo.get(r.repo) ?? []), r]);
+    for (const [repo, runs] of byRepo) {
+      const b = backfills.data.find((x) => x.repo === repo);
+      out.push({
+        at: toDate(runs[0].started_at)?.getTime() ?? 0,
+        node: <BackfillRow key={`backfill:${repo}`} repo={repo} runs={runs} b={b} now={now} />,
+      });
+    }
+    return out.sort((x, y) => y.at - x.at);
+  }, [scope.liveRuns, scope.backfillRuns, backfills.data, now]);
   return (
     <section aria-labelledby="activity">
       <SectionHeading
@@ -177,15 +304,15 @@ function Activity() {
       >
         Live activity
       </SectionHeading>
-      {runs.error && <ErrorNote error={runs.error} />}
+      {scope.runsError && <ErrorNote error={scope.runsError} />}
       <Card className="overflow-hidden">
-        {runs.loading ? (
+        {scope.runsLoading ? (
           <ul>
             {Array.from({ length: 5 }, (_, i) => (
               <RunRowSkeleton key={i} />
             ))}
           </ul>
-        ) : runs.data.length === 0 ? (
+        ) : entries.length === 0 ? (
           <div className="p-5">
             <EmptyState title="No runs yet.">
               Every Action run (analyze on merge, record on reply, guard on new PRs) appears here as it happens,
@@ -193,19 +320,19 @@ function Activity() {
             </EmptyState>
           </div>
         ) : (
-          <ul>
-            {runs.data.map((r) => (
-              <RunRow key={r.id} run={r} now={now} />
-            ))}
-          </ul>
+          <ul>{entries.map((e) => e.node)}</ul>
         )}
       </Card>
+      <p className="mt-2 text-xs text-ink-3">
+        Action runs on live repos. A backfill is read-only and posts nothing, so it shows as one row; its PRs are on
+        the Backfill page.
+      </p>
     </section>
   );
 }
 
-function LatestDecision() {
-  const latest = useLiveQuery(() => latestOf("decisions", "created_at"), asDecision, []);
+function LatestDecision({ scope }: { scope: Scope }) {
+  const latest = scope.decisions;
   return (
     <section aria-labelledby="latest-decision">
       <SectionHeading id="latest-decision" aside={<Link to="/decisions">All decisions</Link>}>
@@ -230,6 +357,7 @@ function LatestDecision() {
 }
 
 export function Overview() {
+  const scope = useLiveScope();
   return (
     <div className="grid gap-12">
       <header className="grid gap-4 border-b border-line pb-8 lg:grid-cols-[1fr_auto] lg:items-end">
@@ -256,10 +384,10 @@ export function Overview() {
           </Ext>
         </div>
       </header>
-      <LoopStrip />
-      <Kpis />
-      <Activity />
-      <LatestDecision />
+      <LoopStrip scope={scope} />
+      <Kpis scope={scope} />
+      <Activity scope={scope} />
+      <LatestDecision scope={scope} />
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { failedCallsForPath, modelForPath } from "../lib/data";
 import { formatDuration } from "../lib/format";
 import { GEMINI_NODES, nodeName, pathDepth, VERIFIER_NODES, workerIndex } from "../lib/nodes";
 import type { RunDoc, TraceEventDoc } from "../lib/types";
-import { cx, EngineMarker, StatusIcon } from "./ui";
+import { cx, EngineMarker, InlineMd, StatusIcon } from "./ui";
 
 export interface TimelineRow {
   path: string;
@@ -160,7 +160,7 @@ export function Timeline({ events, run, live }: { events: TraceEventDoc[]; run: 
                       {failed ? "failed" : r.status === "running" ? "running" : "finished"}
                     </span>
                   </div>
-                  {r.summary && <p className="mt-0.5 line-clamp-2 text-sm text-ink-2">{r.summary}</p>}
+                  {r.summary && <p className="mt-0.5 line-clamp-2 text-sm text-ink-2"><InlineMd text={r.summary} /></p>}
                   {(r.retries.length > 0 || failedCalls.length > 0) && (
                     <p className="mt-0.5 text-xs text-[var(--fail)]">
                       {r.status === "finished" ? "Recovered after " : ""}

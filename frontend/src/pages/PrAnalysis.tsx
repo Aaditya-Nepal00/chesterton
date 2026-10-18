@@ -58,7 +58,7 @@ export function PrAnalysis() {
           }
           aside={<Pill info={runStatus(a.status)} />}
         >
-          {a.title}
+          <InlineMd text={a.title} />
         </PageTitle>
         <div className="-mt-4 flex flex-wrap gap-x-6 gap-y-1 text-sm text-ink-2">
           {a.skip_reason && <span>Skipped: {a.skip_reason}</span>}

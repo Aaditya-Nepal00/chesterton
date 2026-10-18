@@ -61,6 +61,7 @@ function ThemeToggle() {
 const NAV = [
   { to: "/", label: "Overview", end: true, wide: true },
   { to: "/decisions", label: "Decisions", end: false, wide: false },
+  { to: "/backfill", label: "Backfill", end: false, wide: false },
   { to: "/install", label: "Install", end: false, wide: false },
 ];
 

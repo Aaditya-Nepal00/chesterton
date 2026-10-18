@@ -59,6 +59,17 @@ export function prUrl(repo: string, n: number | string): string {
   return `https://github.com/${repo}/pull/${n}`;
 }
 
+/** "Aaditya-Nepal00/chesterton-demo" → "chesterton-demo" (the full name goes in a tooltip). */
 export function shortRepo(repo: string): string {
-  return repo;
+  return repo.slice(repo.indexOf("/") + 1);
+}
+
+const cap = (w: string) => (w ? w[0].toUpperCase() + w.slice(1) : w);
+
+/** "gemini-3.5-flash-lite" → "3.5 Flash-Lite"; anything else is returned unchanged. */
+export function shortModel(model: string): string {
+  const m = /^(?:models\/)?gemini-(\d+(?:\.\d+)?)-(.+)$/i.exec(model);
+  if (!m) return model;
+  const name = m[2].replace(/-preview.*$/i, "").split("-").map(cap).join("-");
+  return `${m[1]} ${name}${/-preview/i.test(m[2]) ? " Preview" : ""}`;
 }

@@ -18,6 +18,7 @@ import type {
   GuardDoc,
   QuestionSetDoc,
   RunDoc,
+  TimeLike,
   TraceEventDoc,
 } from "./types";
 
@@ -50,6 +51,14 @@ export const latestRunsQuery = (n: number): Query | null => {
   return c ? query(c, orderBy("run_id", "desc"), limit(n)) : null;
 };
 export const runRef = (id: string) => (db ? doc(db, "runs", id) : null);
+
+/** Every doc of a collection whose repo is one of `repos` (single-field filter, no index;
+    callers sort client-side). Null until there is a repo to ask for. */
+export const inReposQuery = (name: string, repos: string[]): Query | null => {
+  const c = col(name);
+  return c && repos.length ? query(c, where("repo", "in", repos.slice(0, 30))) : null;
+};
+export const allBackfillsQuery = (): Query | null => col("backfills");
 export const eventsQuery = (id: string): Query | null =>
   db ? query(collection(db, "runs", id, "events"), orderBy("seq")) : null;
 
@@ -94,6 +103,19 @@ export const backfillItemsQuery = (id: string): Query | null =>
   db ? query(collection(db, "backfills", id, "items"), orderBy("pr", "desc")) : null;
 
 // --- derived run facts ---
+
+/** A run the GitHub Action started on a real event (merge, reply, new PR, manual dispatch).
+    Backfill runs (trigger "backfill") and Build-3 CLI runs (trigger "cli") are not live. */
+export function isLiveRun(run: RunDoc): boolean {
+  return /^(pull_request|issue_comment|workflow_dispatch)\b/.test(run.trigger ?? "");
+}
+export const isBackfillRun = (run: RunDoc) => run.trigger === "backfill";
+
+/** Newest first by a time field (Timestamp or ISO string). */
+export function newestFirst<T>(rows: T[], field: (row: T) => TimeLike): T[] {
+  const t = (r: T) => toDate(field(r))?.getTime() ?? 0;
+  return [...rows].sort((a, b) => t(b) - t(a));
+}
 export function runPr(run: RunDoc): number | undefined {
   return run.pr ?? run.number;
 }

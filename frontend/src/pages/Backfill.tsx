@@ -1,17 +1,35 @@
-import { useMemo } from "react";
-import { Link, useParams } from "react-router";
+import { useMemo, type ReactNode } from "react";
+import { Link, Navigate, useParams } from "react-router";
 import { DecisionBar, MethodPopover } from "../components/Backfill";
-import { Card, Code, CopyButton, EmptyState, ErrorNote, Ext, PageTitle, Pill, SectionHeading, Skeleton, Stat } from "../components/ui";
-import { asBackfill, asBackfillItem, backfillItemsQuery, backfillRef, repoDocId } from "../lib/data";
-import { gapCounts, headline, ratePercent } from "../lib/backfill";
+import {
+  Card,
+  Code,
+  CopyButton,
+  EmptyState,
+  ErrorNote,
+  Ext,
+  InlineMd,
+  PageTitle,
+  Pill,
+  SectionHeading,
+  Skeleton,
+  Stat,
+  StatusIcon,
+} from "../components/ui";
+import { asBackfill, asBackfillItem, backfillItemsQuery, backfillRef, backfillsQuery, repoDocId } from "../lib/data";
+import { backfillPath, gapCounts, headline, ratePercent } from "../lib/backfill";
 import { prUrl, toDate } from "../lib/format";
 import { useLiveDoc, useLiveQuery } from "../lib/hooks";
-import { backfillItemStatus, backfillStatus, rationaleStatus } from "../lib/status";
+import { backfillItemStatus, backfillStatus, rationaleStatus, transientModelError, type Tone } from "../lib/status";
 import type { BackfillDoc, BackfillItemDoc, RationaleStatus } from "../lib/types";
 
 const ORDER: RationaleStatus[] = ["missing", "partial", "found", "self_evident"];
 
 function DecisionSummary({ item }: { item: BackfillItemDoc }) {
+  if (item.status === "error") {
+    const cause = transientModelError(item.error);
+    return <span className="text-ink-3">{cause ? `${cause}; retried on --resume` : "Analysis failed; retried on --resume"}</span>;
+  }
   if (item.status !== "analyzed") {
     return <span className="text-ink-3">{item.skip_reason ? item.skip_reason.replace(/^screen: /, "") : "—"}</span>;
   }
@@ -26,22 +44,124 @@ function DecisionSummary({ item }: { item: BackfillItemDoc }) {
   );
 }
 
-function Caveats({ b, pending, errors }: { b: BackfillDoc; pending: number; errors: number }) {
-  const notes: string[] = [];
-  if (b.considered < b.sample_size)
-    notes.push(
-      `${b.considered} of the ${b.sample_size} PRs in the sample have a result so far; the numbers cover those ${b.considered} only.`,
-    );
-  if (pending) notes.push(`${pending} consequential PR${pending > 1 ? "s are" : " is"} screened but not analyzed yet, so ${pending > 1 ? "their" : "its"} decisions are not counted.`);
-  if (errors) notes.push(`${errors} PR${errors > 1 ? "s" : ""} failed and ${errors > 1 ? "are" : "is"} left out.`);
-  if (!notes.length) return null;
+const NOT_REACHED: Record<BackfillDoc["status"], string> = {
+  running: "The backfill is still working through them",
+  complete: "",
+  stopped_budget: "The run stopped at its call budget",
+  paused_quota: "Gemini's daily free-tier quota ran out",
+  incomplete: "The run ended before reaching them",
+};
+
+/** What the rate covers: each PR of the sample is accounted for once. */
+function Coverage({ b, rows }: { b: BackfillDoc; rows: BackfillItemDoc[] }) {
+  const failed = rows.filter((it) => it.status === "error");
+  const waiting = rows.filter((it) => it.status === "pending");
+  const notCounted = b.sample_size - b.considered;
+  const budget = b.status === "stopped_budget" && b.budget_calls ? ` of ${b.budget_calls} Gemini calls` : "";
+  const lines: { tone: Tone; head: ReactNode; body: ReactNode }[] = [
+    {
+      tone: "ok",
+      head: `${b.considered} of ${b.sample_size} PRs counted`,
+      body: (
+        <>
+          Newest first: {b.skipped_deterministic} skipped by rule, {b.screened} screened, {b.analyzed} analyzed for
+          decisions. The {ratePercent(b)} comes from those {b.analyzed} analyzed PRs.
+        </>
+      ),
+    },
+    ...failed.map((it) => {
+      const cause = transientModelError(it.error);
+      return {
+        tone: "slate" as Tone,
+        head: (
+          <>
+            <Ext href={it.url ?? prUrl(b.repo, it.pr)} className="mono">#{it.pr}</Ext> not analyzed
+          </>
+        ),
+        body: (
+          <>
+            {cause ? `${cause} on this PR` : "Analysis of this PR failed"}, so its decisions are not in the rate.{" "}
+            A <Code>--resume</Code> run retries it.
+          </>
+        ),
+      };
+    }),
+  ];
+  if (notCounted > 0) {
+    const reason = NOT_REACHED[b.status];
+    lines.push({
+      tone: "muted",
+      head: `${notCounted} older PR${notCounted > 1 ? "s" : ""} not counted yet`,
+      body: (
+        <>
+          {reason ? `${reason}${budget}` : "They have no result yet"}
+          {waiting.length ? ` (${waiting.length} screened and waiting)` : ""}. A <Code>--resume</Code> run continues
+          with {notCounted > 1 ? "them" : "it"}; until then the numbers describe the newest {b.considered} only.
+        </>
+      ),
+    });
+  }
   return (
-    <ul className="grid gap-1.5 text-sm text-ink-2">
-      {notes.map((n) => (
-        <li key={n} className="tone-muted rounded-[var(--radius)] border px-3 py-2">{n}</li>
-      ))}
-    </ul>
+    <Card>
+      <ul className="divide-y divide-line">
+        {lines.map((l, i) => (
+          <li key={i} className="grid grid-cols-[auto_1fr] gap-x-3 px-4 py-3 text-sm sm:px-5">
+            <span className="pt-[3px]" style={{ color: `var(--${l.tone})` }}>
+              <StatusIcon tone={l.tone} />
+            </span>
+            <span>
+              <span className="font-medium text-ink">{l.head}.</span> <span className="text-ink-2">{l.body}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </Card>
   );
+}
+
+function NoBackfill({ repo }: { repo?: string }) {
+  const cmd = `uv run python scripts/backfill.py ${repo ?? "owner/repo"} --limit 22 --budget-calls 40`;
+  return (
+    <>
+      <PageTitle
+        eyebrow={
+          repo ? (
+            <span>Backfill · <Ext href={`https://github.com/${repo}`} className="mono">{repo}</Ext></span>
+          ) : (
+            "Backfill"
+          )
+        }
+      >
+        {repo ? "No backfill for this repo yet" : "No backfill yet"}
+      </PageTitle>
+      <EmptyState title="Nothing measured here yet." action={<CopyButton text={cmd} label="Copy command" />}>
+        A backfill reads the last merged PRs of a public repo (read-only), skips bot, release, docs-only and
+        tests-only PRs by rule, and checks each consequential decision for a written reason. It never posts
+        anything. Run it from <span className="mono">backend/</span>:
+        <pre className="mono mt-2 whitespace-pre-wrap break-words rounded bg-surface-2 px-3 py-2 text-xs text-ink">{cmd}</pre>
+        Add <Code>--dry-run</Code> first to see how many Gemini calls it needs.
+      </EmptyState>
+    </>
+  );
+}
+
+function BackfillSkeleton() {
+  return (
+    <div className="grid gap-4">
+      <Skeleton className="h-9 w-1/2" />
+      <Skeleton className="h-24 w-full" />
+      <Skeleton className="h-64 w-full" />
+    </div>
+  );
+}
+
+/** /backfill (the nav entry): opens the most recently updated backfill. */
+export function BackfillLatest() {
+  const latest = useLiveQuery(backfillsQuery, asBackfill, []);
+  if (latest.loading) return <BackfillSkeleton />;
+  if (latest.error) return <ErrorNote error={latest.error} />;
+  const b = latest.data[0];
+  return b ? <Navigate to={backfillPath(b.repo)} replace /> : <NoBackfill />;
 }
 
 export function Backfill() {
@@ -63,33 +183,9 @@ export function Backfill() {
       .sort((x, y) => (rank.get(x.pr) ?? 0) - (rank.get(y.pr) ?? 0));
   }, [b, items.data]);
 
-  if (bf.loading) {
-    return (
-      <div className="grid gap-4">
-        <Skeleton className="h-9 w-1/2" />
-        <Skeleton className="h-24 w-full" />
-        <Skeleton className="h-64 w-full" />
-      </div>
-    );
-  }
+  if (bf.loading) return <BackfillSkeleton />;
   if (bf.error) return <ErrorNote error={bf.error} />;
-  if (!b) {
-    const cmd = `uv run python scripts/backfill.py ${repo} --limit 22 --budget-calls 40`;
-    return (
-      <>
-        <PageTitle eyebrow={<span>Backfill · <Ext href={`https://github.com/${repo}`} className="mono">{repo}</Ext></span>}>
-          No backfill for this repo yet
-        </PageTitle>
-        <EmptyState title="Nothing measured here yet." action={<CopyButton text={cmd} label="Copy command" />}>
-          A backfill reads the last merged PRs of a public repo (read-only), skips bot, release, docs-only and
-          tests-only PRs by rule, and checks each consequential decision for a written reason. It never posts
-          anything. Run it from <span className="mono">backend/</span>:
-          <pre className="mono mt-2 whitespace-pre-wrap break-words rounded bg-surface-2 px-3 py-2 text-xs text-ink">{cmd}</pre>
-          Add <Code>--dry-run</Code> first to see how many Gemini calls it needs.
-        </EmptyState>
-      </>
-    );
-  }
+  if (!b) return <NoBackfill repo={repo} />;
 
   return <BackfillReport repo={repo} b={b} rows={rows} itemsLoading={items.loading} itemsError={items.error} />;
 }
@@ -160,7 +256,7 @@ export function BackfillReport({
           </EmptyState>
         )}
         <div className="mt-4">
-          <Caveats b={b} pending={b.pending ?? 0} errors={b.errors ?? 0} />
+          <Coverage b={b} rows={rows} />
         </div>
       </section>
 
@@ -192,16 +288,16 @@ export function BackfillReport({
                       <Ext href={it.url ?? prUrl(repo, it.pr)} className="mono">#{it.pr}</Ext>
                     </td>
                     <td className="px-3 py-2.5 sm:px-4">
-                      <div className="break-words text-ink">{it.title}</div>
+                      <div className="break-words text-ink"><InlineMd text={it.title ?? ""} /></div>
                       <div className="mt-1 md:hidden">
-                        <Pill size="xs" info={backfillItemStatus(it.status)} />
+                        <Pill size="xs" info={backfillItemStatus(it.status, it.error)} />
                       </div>
                       <div className="mt-1 text-xs text-ink-2 lg:hidden">
                         <DecisionSummary item={it} />
                       </div>
                     </td>
                     <td className="hidden px-4 py-2.5 md:table-cell">
-                      <Pill size="xs" info={backfillItemStatus(it.status)} />
+                      <Pill size="xs" info={backfillItemStatus(it.status, it.error)} />
                     </td>
                     <td className="hidden px-4 py-2.5 text-xs lg:table-cell">
                       <DecisionSummary item={it} />
@@ -213,6 +309,12 @@ export function BackfillReport({
                 ))}
               </tbody>
             </table>
+            {b.sample_size > rows.length && (
+              <p className="border-t border-line bg-surface-2 px-3 py-2.5 text-sm text-ink-3 sm:px-4">
+                {b.sample_size - rows.length} older PR{b.sample_size - rows.length > 1 ? "s" : ""} of the sample not
+                reached yet. They appear here when a <Code>--resume</Code> run gets to them.
+              </p>
+            )}
           </Card>
         )}
       </section>

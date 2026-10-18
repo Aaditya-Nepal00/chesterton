@@ -88,7 +88,7 @@ export function DecisionRecordView({
         <Field label="Evidence">
           <ul className="grid gap-1 text-sm">
             <li>
-              Source PR: <Ext href={sourcePr}>#{d.source_pr} {d.source_pr_title}</Ext>{" "}
+              Source PR: <Ext href={sourcePr}>#{d.source_pr} <InlineMd text={d.source_pr_title ?? ""} /></Ext>{" "}
               <Link to={`/pr/${d.repo}/${d.source_pr}`} className="ml-1 text-ink-3">analysis</Link>
             </li>
             {d.evidence_url && (
